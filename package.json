@@ -1,0 +1,22 @@
+{
+  "name": "piska-hub",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Hub: один аккаунт для трёх приложений — Voice (голосовой чат), Watch (совместный просмотр), Boost (ускоритель игр)",
+  "type": "module",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "start": "node --no-warnings=ExperimentalWarning server/src/main.js",
+    "dev": "node --watch server/src/main.js",
+    "relay": "node server/src/boost/relay-main.js",
+    "test": "node --no-warnings --test --test-concurrency=1 --test-timeout=20000 test/*.test.js",
+    "test:e2e": "node --no-warnings --test --test-timeout=90000 test/e2e/*.test.js",
+    "test:all": "npm test && npm run test:e2e"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "ws": "^8.18.0"
+  }
+}

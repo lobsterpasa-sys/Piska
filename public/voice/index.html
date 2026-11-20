@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Hub Voice</title>
+  <link rel="stylesheet" href="/shared/style.css">
+  <style>
+    .stage { display: grid; grid-template-columns: 1fr 340px; gap: 16px; }
+    @media (max-width: 860px) { .stage { grid-template-columns: 1fr; } }
+    .peers { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
+    .peer { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 14px 10px; background: var(--bg-2); border-radius: 12px; text-align: center; }
+    .peer .avatar { width: 64px; height: 64px; font-size: 1.3rem; }
+    .peer .name { font-weight: 600; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .peer input[type=range] { width: 100%; accent-color: var(--accent); padding: 0; }
+    .controls { display: flex; gap: 12px; align-items: center; justify-content: center; flex-wrap: wrap; margin-top: 16px; }
+    .meter { height: 6px; border-radius: 3px; background: var(--bg-2); overflow: hidden; width: 140px; }
+    .meter > div { height: 100%; width: 0; background: var(--ok); transition: width .08s; }
+    .state-ico { font-size: .8rem; color: var(--muted); min-height: 1.2em; }
+  </style>
+</head>
+<body data-app="voice">
+  <main class="container">
+    <section id="lobby" class="grid cols-2" style="align-items:start">
+      <div class="card">
+        <h1>🎧 Voice</h1>
+        <p class="muted">Голосовой чат для игры с друзьями. Звук идёт напрямую между участниками, поэтому задержка минимальная. Громкость каждого друга настраивается отдельно, чтобы вы слышали и игру, и друзей.</p>
+        <form id="join-form">
+          <label for="room">Комната</label>
+          <input id="room" name="room" placeholder="например, squad-1" required pattern="[a-zA-Z0-9_\-]{1,40}">
+          <label for="password">Пароль (необязательно, только Premium)</label>
+          <input id="password" name="password" type="password" autocomplete="off">
+          <button class="btn" style="width:100%;margin-top:14px" data-testid="join-voice">Войти в комнату</button>
+        </form>
+      </div>
+      <div class="card">
+        <div class="row"><h2 class="grow">Открытые комнаты</h2><button class="btn ghost sm" id="refresh">↻</button></div>
+        <div class="list" id="rooms"><p class="muted">Загрузка…</p></div>
+      </div>
+    </section>
+
+    <section id="room-view" class="hidden">
+      <div class="stage">
+        <div class="card">
+          <div class="row wrap">
+            <h2 class="grow" id="room-title"></h2>
+            <button class="btn ghost sm" id="invite">🔗 Пригласить</button>
+          </div>
+          <p class="muted small" id="room-info"></p>
+          <div class="peers" id="peers" data-testid="peers"></div>
+          <div class="controls">
+            <button class="btn round" id="mute" title="Микрофон" data-testid="mute">🎙️</button>
+            <div>
+              <label for="effect" style="margin-top:0">Эффект голоса</label>
+              <select id="effect" data-testid="effect"></select>
+            </div>
+            <div>
+              <div class="small muted">Микрофон</div>
+              <div class="meter"><div id="level"></div></div>
+            </div>
+            <button class="btn danger" id="leave">Выйти</button>
+          </div>
+        </div>
+        <div class="card"><h3>Чат комнаты</h3><div id="chat"></div></div>
+      </div>
+    </section>
+  </main>
+  <script type="module" src="/voice/voice.js"></script>
+</body>
+</html>

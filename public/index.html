@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Hub аккаунт</title>
+  <link rel="stylesheet" href="/shared/style.css">
+  <link rel="manifest" href="/manifest.webmanifest">
+</head>
+<body data-app="voice">
+  <main class="container" id="root"></main>
+  <script type="module">
+    import { api, getToken, authForm, renderTopbar, logout, APP_META, esc, toast } from '/shared/hub.js';
+
+    const root = document.getElementById('root');
+    const fmtDate = (ms) => new Date(ms).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' });
+
+    function appCards(linked = []) {
+      return Object.entries(APP_META).map(([k, m]) => {
+        const on = linked.some((a) => a.app === k);
+        return `<a class="card app-card" href="/${k}" data-testid="app-${k}" style="--accent:${k === 'voice' ? '#7c5cff' : k === 'watch' ? '#ff4f8b' : '#19d38a'}">
+          <div class="app-icon">${m.icon}</div>
+          <h3>${m.title}</h3>
+          <div class="muted small">${m.desc}</div>
+          <div class="small">${on ? '<span class="check">✓ Подключено к аккаунту</span>' : '<span class="muted">Откройте — вход выполнится автоматически</span>'}</div>
+        </a>`;
+      }).join('');
+    }
+
+    async function renderLanding() {
+      renderTopbar(null, null);
+      root.innerHTML = `
+        <section class="grid cols-2" style="align-items:start">
+          <div>
+            <h1>Один аккаунт — три приложения</h1>
+            <p class="muted">Зарегистрируйтесь один раз и пользуйтесь голосовым чатом, совместным просмотром и ускорителем игр без повторной регистрации. Одна подписка Premium работает везде.</p>
+            <div class="grid" style="margin-top:16px">${appCards()}</div>
+          </div>
+          <div class="card" id="auth"></div>
+        </section>`;
+      await authForm(document.getElementById('auth'));
+      location.reload();
+    }
+
+    function planCards(account, plans) {
+      const isPremium = account.plan.id === 'premium';
+      const p = plans.find((x) => x.id === 'premium');
+      const f = plans.find((x) => x.id === 'free');
+      return `
+        <div class="card plan-card">
+          <h3>Free</h3><div class="price">Бесплатно</div>
+          <ul class="features">
+            <li>Голосовые комнаты до ${f.limits.voiceRoomSize} человек</li>
+            <li>Совместный просмотр до ${f.limits.watchRoomSize} человек</li>
+            <li>Эффекты голоса: эхо</li>
+            <li>Стандартные узлы ускорителя</li>
+          </ul>
+        </div>
+        <div class="card plan-card featured">
+          <h3>⭐ ${p.name}</h3><div class="price">$${p.priceMonthly}<span class="muted small"> / мес</span></div>
+          <ul class="features">
+            <li>Комнаты до ${p.limits.voiceRoomSize} человек в Voice и Watch</li>
+            <li>Все эффекты голоса (робот, рация, бас, бурундук)</li>
+            <li>Звук ${p.limits.voiceBitrateKbps} кбит/с вместо ${f.limits.voiceBitrateKbps}</li>
+            <li>Приватные комнаты с паролем</li>
+            <li>Премиум-узлы и мультипуть в Boost</li>
+          </ul>
+          ${isPremium
+            ? `<p class="small">Активна до <b>${fmtDate(account.subscription.expiresAt)}</b>${account.subscription.autoRenew ? '' : ' (автопродление отключено)'}</p>
+               <div class="row wrap">
+                 <button class="btn gold sm" data-buy="1">Продлить на месяц</button>
+                 ${account.subscription.autoRenew ? '<button class="btn ghost sm" data-cancel>Отменить автопродление</button>' : ''}
+               </div>`
+            : `<div class="row wrap">
+                 <button class="btn gold" data-buy="1" data-testid="buy-premium">1 месяц</button>
+                 <button class="btn ghost" data-buy="3">3 мес −15%</button>
+                 <button class="btn ghost" data-buy="12">Год −40%</button>
+               </div>`}
+        </div>`;
+    }
+
+    async function renderAccount(account) {
+      const { plans, paymentsMode } = await api('/api/plans');
+      renderTopbar(null, account);
+      root.innerHTML = `
+        <h1>Привет, ${esc(account.user.username)} 👋</h1>
+        <p class="muted">Аккаунт Hub · ${esc(account.user.email)} · с ${fmtDate(account.user.createdAt)}</p>
+        <h2 style="margin-top:24px">Ваши приложения</h2>
+        <div class="grid cols-3" id="apps">${appCards(account.apps)}</div>
+        <h2 style="margin-top:32px">Подписка</h2>
+        ${paymentsMode === 'test' ? '<p class="small" style="color:var(--warn)">Тестовый режим оплаты: подписка активируется без списания денег.</p>' : ''}
+        <div class="grid cols-2" id="plans">${planCards(account, plans)}</div>
+        <div style="margin-top:32px"><button class="btn ghost" id="logout">Выйти из аккаунта</button></div>`;
+
+      root.querySelectorAll('[data-buy]').forEach((b) => b.addEventListener('click', async () => {
+        try {
+          const acc = await api('/api/subscription/checkout', { method: 'POST', body: { plan: 'premium', months: Number(b.dataset.buy) } });
+          toast('Premium активирован во всех приложениях ⭐');
+          document.querySelector('.topbar').remove();
+          renderAccount(acc);
+        } catch (e) { toast(e.message, 'bad'); }
+      }));
+      root.querySelector('[data-cancel]')?.addEventListener('click', async () => {
+        const acc = await api('/api/subscription/cancel', { method: 'POST' });
+        toast('Автопродление отключено');
+        document.querySelector('.topbar').remove();
+        renderAccount(acc);
+      });
+      document.getElementById('logout').addEventListener('click', logout);
+    }
+
+    if (!getToken()) renderLanding();
+    else api('/api/me').then(renderAccount).catch(() => { localStorage.removeItem('hub.token'); renderLanding(); });
+  </script>
+</body>
+</html>
