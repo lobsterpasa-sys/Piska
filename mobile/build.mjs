@@ -7,6 +7,8 @@
  * Без --apk — только готовит Android-проекты (их можно открыть в Android Studio).
  * С --apk — ещё и собирает отладочные APK в mobile/dist/ (нужен Android SDK: ANDROID_HOME).
  * --api — адрес сервера Hub. По умолчанию http://10.0.2.2:3000 (это ваш компьютер из эмулятора Android).
+ *         В приложении адрес можно поменять на экране входа (⚙ Сервер).
+ * --secure — сборка для публикации: только https, без http-трафика.
  */
 import { cpSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync, readdirSync, statSync, copyFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
@@ -55,7 +57,7 @@ export function buildWww(app, dir, apiBase) {
 }
 
 /** Права и глубокие ссылки в AndroidManifest.xml. */
-function patchManifest(app, dir, apiBase) {
+function patchManifest(app, dir, secure) {
   const path = join(dir, 'android/app/src/main/AndroidManifest.xml');
   let xml = readFileSync(path, 'utf8');
   const { scheme, permissions = [] } = APPS[app];
@@ -83,11 +85,51 @@ function patchManifest(app, dir, apiBase) {
     xml = xml.replace('<application', `<queries>\n${intents}\n    </queries>\n\n    <application`);
   }
 
-  // Локальный сервер для разработки работает по http.
-  if (apiBase.startsWith('http://') && !xml.includes('usesCleartextTraffic')) {
+  // Тестовые сборки разрешают http, чтобы подключаться к серверу на компьютере в той же Wi-Fi-сети.
+  // Для публикации собирайте с --secure и сервером на https.
+  if (!secure && !xml.includes('usesCleartextTraffic')) {
     xml = xml.replace('<application', '<application\n        android:usesCleartextTraffic="true"');
   }
   writeFileSync(path, xml);
+}
+
+// Простые векторные иконки: наушники, «play», молния — на фоне цвета приложения.
+const ICON_PATHS = {
+  voice: '<path android:strokeColor="#FFFFFF" android:strokeWidth="6" android:strokeLineCap="round" android:fillColor="#00000000" android:pathData="M36,64 L36,54 A18,18 0 0 1 72,54 L72,64"/>'
+    + '<path android:fillColor="#FFFFFF" android:pathData="M30,58 h12 v20 h-8 a4,4 0 0 1 -4,-4 z M66,58 h12 v16 a4,4 0 0 1 -4,4 h-8 z"/>',
+  watch: '<path android:fillColor="#FFFFFF" android:pathData="M45,36 L75,54 L45,72 Z"/>',
+  boost: '<path android:fillColor="#FFFFFF" android:pathData="M60,28 L38,58 L52,58 L47,80 L70,48 L56,48 Z"/>',
+};
+
+function patchIcons(app, dir) {
+  const res = join(dir, 'android/app/src/main/res');
+  const { color } = APPS[app];
+  writeFileSync(join(res, 'drawable/hub_icon_fg.xml'), `<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">
+    ${ICON_PATHS[app]}
+</vector>\n`);
+  writeFileSync(join(res, 'values/ic_launcher_background.xml'), `<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="ic_launcher_background">${color}</color>
+</resources>\n`);
+  for (const name of ['ic_launcher.xml', 'ic_launcher_round.xml']) {
+    writeFileSync(join(res, 'mipmap-anydpi-v26', name), `<?xml version="1.0" encoding="utf-8"?>
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@color/ic_launcher_background"/>
+    <foreground android:drawable="@drawable/hub_icon_fg"/>
+</adaptive-icon>\n`);
+  }
+  // Заставка при запуске: тёмный фон и иконка приложения.
+  writeFileSync(join(res, 'drawable/hub_splash.xml'), `<?xml version="1.0" encoding="utf-8"?>
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item><color android:color="#0B0D14"/></item>
+    <item android:width="96dp" android:height="96dp" android:gravity="center">
+        <shape android:shape="oval"><solid android:color="${color}"/></shape>
+    </item>
+    <item android:width="96dp" android:height="96dp" android:gravity="center" android:drawable="@drawable/hub_icon_fg"/>
+</layer-list>\n`);
+  const styles = join(res, 'values/styles.xml');
+  writeFileSync(styles, readFileSync(styles, 'utf8').replace('@drawable/splash<', '@drawable/hub_splash<'));
 }
 
 function main() {
@@ -95,6 +137,8 @@ const args = process.argv.slice(2);
 const which = args.find((a) => !a.startsWith('--')) ?? 'all';
 const apiBase = (args.find((a) => a.startsWith('--api='))?.slice(6) ?? 'http://10.0.2.2:3000').replace(/\/$/, '');
 const buildApk = args.includes('--apk');
+const secure = args.includes('--secure');
+if (secure && !apiBase.startsWith('https://')) { console.error('С --secure адрес сервера должен быть https://'); process.exit(1); }
 const targets = which === 'all' ? Object.keys(APPS) : [which];
 for (const t of targets) if (!APPS[t]) { console.error(`Неизвестное приложение: ${t}`); process.exit(1); }
 
@@ -113,7 +157,7 @@ for (const app of targets) {
     appName: meta.name,
     webDir: 'www',
     backgroundColor: '#0b0d14',
-    android: { allowMixedContent: apiBase.startsWith('http://') },
+    android: { allowMixedContent: !secure },
     server: { androidScheme: 'https' },
   }, null, 2)}\n`);
   buildWww(app, dir, apiBase);
@@ -121,7 +165,8 @@ for (const app of targets) {
   const cap = join(ROOT, 'node_modules/@capacitor/cli/bin/capacitor');
   if (!existsSync(join(dir, 'android'))) run(process.execPath, [cap, 'add', 'android'], dir);
   run(process.execPath, [cap, 'sync', 'android'], dir);
-  patchManifest(app, dir, apiBase);
+  patchManifest(app, dir, secure);
+  patchIcons(app, dir);
 
   if (buildApk) {
     if (!process.env.ANDROID_HOME && !process.env.ANDROID_SDK_ROOT) {

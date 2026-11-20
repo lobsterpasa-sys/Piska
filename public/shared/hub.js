@@ -10,7 +10,10 @@ const TOKEN_KEY = 'hub.token';
  */
 export const CONFIG = window.HUB_CONFIG ?? {};
 export const IS_NATIVE = Boolean(CONFIG.native);
-const API_BASE = String(CONFIG.apiBase ?? '').replace(/\/$/, '');
+const SERVER_KEY = 'hub.server';
+function savedServer() { try { return localStorage.getItem(SERVER_KEY); } catch { return null; } }
+// В приложении адрес сервера можно поменять на экране входа (например, на адрес компьютера в Wi-Fi).
+const API_BASE = String((IS_NATIVE && savedServer()) || CONFIG.apiBase || '').replace(/\/$/, '');
 export const apiUrl = (path) => API_BASE + path;
 /** Публичная ссылка (для приглашений): ведёт на сайт, даже если открыто из приложения. */
 export const publicUrl = (path) => (API_BASE || location.origin) + path;
@@ -100,13 +103,25 @@ export function authForm(container, appName) {
         <div class="error"></div>
         <button class="btn" style="width:100%">Создать аккаунт</button>
       </form>
-      <p class="muted small" style="margin-top:12px">Один аккаунт для Voice, Watch и Boost.</p>`;
+      <p class="muted small" style="margin-top:12px">Один аккаунт для Voice, Watch и Boost.</p>
+      ${IS_NATIVE ? `<details style="margin-top:8px"><summary class="muted small">⚙ Сервер: ${esc(API_BASE)}</summary>
+        <form data-server class="row" style="margin-top:8px">
+          <input name="server" value="${esc(API_BASE)}" placeholder="https://hub.example.com" inputmode="url" autocomplete="off">
+          <button class="btn sm ghost">OK</button>
+        </form></details>` : ''}`;
+    container.querySelector('[data-server]')?.addEventListener('submit', (e) => {
+      e.preventDefault();
+      const v = e.target.server.value.trim().replace(/\/$/, '');
+      if (!/^https?:\/\/[^\s/]+(:\d+)?$/.test(v)) { toast('Адрес вида https://hub.example.com или http://192.168.1.10:3000', 'bad'); return; }
+      try { localStorage.setItem(SERVER_KEY, v); } catch { /* */ }
+      location.reload();
+    });
     const tabs = container.querySelectorAll('[data-tab]');
     tabs.forEach((t) => t.addEventListener('click', () => {
       tabs.forEach((x) => x.classList.toggle('active', x === t));
-      container.querySelectorAll('form').forEach((f) => f.classList.toggle('hidden', f.dataset.form !== t.dataset.tab));
+      container.querySelectorAll('form[data-form]').forEach((f) => f.classList.toggle('hidden', f.dataset.form !== t.dataset.tab));
     }));
-    container.querySelectorAll('form').forEach((form) => form.addEventListener('submit', async (e) => {
+    container.querySelectorAll('form[data-form]').forEach((form) => form.addEventListener('submit', async (e) => {
       e.preventDefault();
       const kind = form.dataset.form;
       const body = Object.fromEntries(new FormData(form));
