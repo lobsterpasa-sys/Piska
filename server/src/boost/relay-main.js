@@ -7,6 +7,6 @@ if (!secret) {
   console.error('Укажите RELAY_SECRET (тот же, что HUB_SECRET на основном сервере)');
   process.exit(1);
 }
-const relay = new UdpRelay({ secret, port: Number(process.env.RELAY_PORT ?? 40000) });
+const relay = new UdpRelay({ secret, port: Number(process.env.RELAY_PORT ?? 40000), maxFlows: Number(process.env.RELAY_MAX_FLOWS ?? 64) });
 const port = await relay.start();
 console.log(`Boost relay node слушает UDP :${port}`);

@@ -1,4 +1,4 @@
-import { api, ensureLogin, renderTopbar, mountFriends, toast, esc, apiUrl, pageUrl } from '/shared/hub.js';
+import { api, ensureLogin, renderTopbar, mountFriends, toast, esc, apiUrl, pageUrl, IS_NATIVE } from '/shared/hub.js';
 
 const $ = (id) => document.getElementById(id);
 const account = await ensureLogin('boost');
@@ -14,6 +14,17 @@ try { saved = JSON.parse(localStorage.getItem(STORE_KEY) ?? '{}'); } catch { /* 
 let selectedGame = games.find((g) => g.id === saved.game)?.id ?? null;
 let selectedNode = nodes.find((n) => n.id === saved.node && !n.locked)?.id ?? null;
 const results = new Map(); // nodeId -> { ping, jitter, loss }
+
+// В приложении для Android ускорение выполняет нативный VPN-сервис (HubBoostPlugin).
+const native = IS_NATIVE ? window.Capacitor?.Plugins?.HubBoost : null;
+let installedPkgs = new Set();
+if (native) {
+  try {
+    const all = games.flatMap((g) => g.android ?? []);
+    installedPkgs = new Set((await native.installed({ packages: all })).packages);
+  } catch { /* старое приложение без плагина */ }
+}
+const isInstalled = (g) => (g.android ?? []).some((p) => installedPkgs.has(p));
 
 $('multipath').textContent = nodeData.multipath
   ? '⭐ Мультипуть включён: трафик дублируется по двум маршрутам для защиты от потерь.'
@@ -61,10 +72,13 @@ const cls = (v, good, mid) => (v == null ? '' : v <= good ? 'good' : v <= mid ? 
 // ---------- Отрисовка ----------
 function renderGames() {
   const q = $('search').value.trim().toLowerCase();
-  $('games').innerHTML = games
-    .filter((g) => !q || g.name.toLowerCase().includes(q))
+  const list = games.filter((g) => !q || g.name.toLowerCase().includes(q));
+  if (native) list.sort((a, b) => Number(isInstalled(b)) - Number(isInstalled(a)));
+  $('games').innerHTML = list
     .map((g) => `<button class="game ${g.id === selectedGame ? 'active' : ''}" data-game="${g.id}">
-      <b>${esc(g.name)}</b><div class="plat">${g.platforms.map((p) => PLATFORM[p]).join(' · ')}</div></button>`).join('');
+      <b>${esc(g.name)}</b><div class="plat">${native
+        ? (isInstalled(g) ? '<span class="good">✓ установлена</span>' : g.android ? 'не установлена' : 'нет версии для Android')
+        : g.platforms.map((p) => PLATFORM[p]).join(' · ')}</div></button>`).join('');
   $('games').querySelectorAll('[data-game]').forEach((b) => b.addEventListener('click', () => {
     selectedGame = b.dataset.game;
     persist();
@@ -148,27 +162,61 @@ function drawChart() {
   }
 }
 
+function showStats(ping, jitter, loss) {
+  $('s-ping').textContent = ping != null && ping >= 0 ? Math.round(ping) : '—';
+  $('s-jitter').textContent = jitter != null ? Math.round(jitter) : '—';
+  $('s-loss').textContent = `${Math.round((loss ?? 0) * 100)}%`;
+}
+
+const fmtBytes = (n) => (n > 1048576 ? `${(n / 1048576).toFixed(1)} МБ` : `${Math.round(n / 1024)} КБ`);
+
+/** Android: настоящее ускорение через VPN-сервис. */
+async function startNativeBoost() {
+  const game = games.find((g) => g.id === selectedGame);
+  if (!isInstalled(game)) throw new Error(game.android ? 'Эта игра не установлена на телефоне' : 'У этой игры нет версии для Android');
+  const session = await api('/api/boost/session', { method: 'POST', body: { gameId: selectedGame, nodeId: selectedNode } });
+  await native.start({ host: session.node.host, port: session.node.udpPort, token: session.sessionToken, packages: game.android, game: game.name });
+  $('boost').textContent = 'СТОП';
+  $('boost').classList.add('on');
+  $('session-info').textContent = 'Подключаемся к узлу…';
+  pingHistory = [];
+  monitor = setInterval(async () => {
+    const st = await native.status();
+    if (st.state === 'error') { stopBoost(); toast(st.error || 'Не удалось запустить ускорение', 'bad'); return; }
+    if (st.state === 'stopped') { stopBoost(); return; }
+    if (st.state === 'running') {
+      pingHistory.push(st.rttMs >= 0 ? st.rttMs : null);
+      if (pingHistory.length > 60) pingHistory.shift();
+      showStats(st.rttMs, st.jitterMs, st.loss);
+      drawChart();
+      $('session-info').innerHTML = `⚡ Ускорение работает: <b>${esc(session.game.name)}</b> через узел <b>${esc(session.node.name)}</b>.<br>
+        Запускайте игру. Трафик через узел: ↑ ${fmtBytes(st.upBytes)} · ↓ ${fmtBytes(st.downBytes)}.<br>
+        <span class="muted">Пинг показан до узла. Через узел идёт UDP игры (матчи), лобби и загрузки — напрямую.</span>`;
+    }
+  }, 1000);
+}
+
 async function startBoost() {
+  if (native) return startNativeBoost();
   const node = nodes.find((n) => n.id === selectedNode);
   const session = await api('/api/boost/session', { method: 'POST', body: { gameId: selectedGame, nodeId: selectedNode } });
   $('boost').textContent = 'СТОП';
   $('boost').classList.add('on');
   $('session-info').innerHTML = `✅ Сессия активна: <b>${esc(session.game.name)}</b> через узел <b>${esc(session.node.name)}</b> (${esc(session.node.host)}:${session.node.udpPort}).<br>
-    В веб-версии выполняется подбор узла и контроль качества связи. Перенаправление трафика игры выполняет приложение Hub Boost для Android и ПК: оно использует эту же сессию.`;
+    В веб-версии выполняется подбор узла и контроль качества связи. Чтобы пустить игру через узел, используйте приложение Hub Boost для Android.`;
   pingHistory = [];
   monitor = setInterval(async () => {
     const v = await probeOnce(probeUrl(node), 1500);
     pingHistory.push(v);
     if (pingHistory.length > 60) pingHistory.shift();
     const s = summarize(pingHistory);
-    $('s-ping').textContent = s.ping != null ? Math.round(s.ping) : '—';
-    $('s-jitter').textContent = s.jitter != null ? Math.round(s.jitter) : '—';
-    $('s-loss').textContent = `${Math.round(s.loss * 100)}%`;
+    showStats(s.ping, s.jitter, s.loss);
     drawChart();
   }, 1000);
 }
 
 function stopBoost() {
+  if (native) native.stop().catch(() => {});
   clearInterval(monitor);
   monitor = null;
   $('boost').textContent = 'УСКОРИТЬ';
@@ -185,3 +233,21 @@ $('search').addEventListener('input', renderGames);
 renderGames();
 renderNodes();
 renderSummary();
+
+// Если ускорение уже работает (приложение открыли заново) — показываем его.
+if (native) {
+  native.status().then((st) => {
+    if (st.state !== 'running') return;
+    $('session-info').textContent = `⚡ Ускорение работает: ${st.game ?? ''}`;
+    $('boost').textContent = 'СТОП';
+    $('boost').classList.add('on');
+    monitor = setInterval(async () => {
+      const s2 = await native.status();
+      if (s2.state !== 'running') { stopBoost(); return; }
+      pingHistory.push(s2.rttMs >= 0 ? s2.rttMs : null);
+      if (pingHistory.length > 60) pingHistory.shift();
+      showStats(s2.rttMs, s2.jitterMs, s2.loss);
+      drawChart();
+    }, 1000);
+  }).catch(() => {});
+}

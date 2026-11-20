@@ -10,6 +10,13 @@
             <action android:name="android.intent.action.VIEW" />
             <data android:scheme="hubwatch" />
         </intent>
+        <package android:name="com.tencent.ig" />
+        <package android:name="com.activision.callofduty.shooter" />
+        <package android:name="com.axlebolt.standoff2" />
+        <package android:name="com.epicgames.fortnite" />
+        <package android:name="com.miHoYo.GenshinImpact" />
+        <package android:name="com.roblox.client" />
+        <package android:name="com.mojang.minecraftpe" />
     </queries>
 
     <application
@@ -51,6 +58,14 @@
                 android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/file_paths"></meta-data>
         </provider>
+        <service
+            android:name=".BoostVpnService"
+            android:permission="android.permission.BIND_VPN_SERVICE"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.net.VpnService" />
+            </intent-filter>
+        </service>
     </application>
 
     <!-- Permissions -->

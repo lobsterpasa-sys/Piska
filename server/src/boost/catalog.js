@@ -9,17 +9,18 @@
  * Узлы задаются переменной окружения BOOST_NODES (JSON-массив). Без неё есть
  * только один узел — локальный, для разработки и тестов.
  */
+// android — имена пакетов игры: приложение Boost пропускает через узел только их трафик.
 export const GAMES = [
-  { id: 'pubg-mobile', name: 'PUBG Mobile', platforms: ['android', 'ios'], regions: ['eu', 'me', 'asia'] },
-  { id: 'cod-mobile', name: 'Call of Duty: Mobile', platforms: ['android', 'ios'], regions: ['eu', 'na', 'asia'] },
-  { id: 'standoff2', name: 'Standoff 2', platforms: ['android', 'ios'], regions: ['eu', 'ru'] },
+  { id: 'pubg-mobile', name: 'PUBG Mobile', platforms: ['android', 'ios'], regions: ['eu', 'me', 'asia'], android: ['com.tencent.ig'] },
+  { id: 'cod-mobile', name: 'Call of Duty: Mobile', platforms: ['android', 'ios'], regions: ['eu', 'na', 'asia'], android: ['com.activision.callofduty.shooter'] },
+  { id: 'standoff2', name: 'Standoff 2', platforms: ['android', 'ios'], regions: ['eu', 'ru'], android: ['com.axlebolt.standoff2'] },
   { id: 'cs2', name: 'Counter-Strike 2', platforms: ['pc'], regions: ['eu', 'ru', 'na'] },
   { id: 'dota2', name: 'Dota 2', platforms: ['pc'], regions: ['eu', 'ru', 'asia'] },
   { id: 'valorant', name: 'VALORANT', platforms: ['pc'], regions: ['eu', 'na', 'asia'] },
-  { id: 'fortnite', name: 'Fortnite', platforms: ['pc', 'android', 'console'], regions: ['eu', 'na'] },
-  { id: 'genshin', name: 'Genshin Impact', platforms: ['pc', 'android', 'ios'], regions: ['eu', 'asia', 'na'] },
-  { id: 'roblox', name: 'Roblox', platforms: ['pc', 'android', 'ios'], regions: ['eu', 'na'] },
-  { id: 'minecraft', name: 'Minecraft', platforms: ['pc', 'android', 'ios'], regions: ['eu', 'na', 'ru'] },
+  { id: 'fortnite', name: 'Fortnite', platforms: ['pc', 'android', 'console'], regions: ['eu', 'na'], android: ['com.epicgames.fortnite'] },
+  { id: 'genshin', name: 'Genshin Impact', platforms: ['pc', 'android', 'ios'], regions: ['eu', 'asia', 'na'], android: ['com.miHoYo.GenshinImpact'] },
+  { id: 'roblox', name: 'Roblox', platforms: ['pc', 'android', 'ios'], regions: ['eu', 'na'], android: ['com.roblox.client'] },
+  { id: 'minecraft', name: 'Minecraft', platforms: ['pc', 'android', 'ios'], regions: ['eu', 'na', 'ru'], android: ['com.mojang.minecraftpe'] },
 ];
 
 export function loadNodes(env = process.env) {

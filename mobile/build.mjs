@@ -16,6 +16,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { execFileSync } from 'node:child_process';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
+const { GAMES } = await import(pathToFileURL(join(ROOT, 'server/src/boost/catalog.js')).href);
 const MOBILE = join(ROOT, 'mobile');
 const APPS = JSON.parse(readFileSync(join(MOBILE, 'apps.json'), 'utf8'));
 
@@ -57,6 +58,18 @@ export function buildWww(app, dir, apiBase) {
 }
 
 /** Права и глубокие ссылки в AndroidManifest.xml. */
+/** Нативный код (mobile/native/<app>) копируется в Android-проект при каждой сборке. */
+function copyNative(app, dir) {
+  const src = join(MOBILE, 'native', app);
+  if (!existsSync(src)) return;
+  const pkgPath = APPS[app].appId.replace(/\./g, '/');
+  if (existsSync(join(src, 'java'))) cpSync(join(src, 'java'), join(dir, 'android/app/src/main/java'), { recursive: true });
+  if (existsSync(join(src, 'test'))) {
+    rmSync(join(dir, 'android/app/src/test/java', pkgPath, 'ExampleUnitTest.java'), { force: true });
+    cpSync(join(src, 'test'), join(dir, 'android/app/src/test/java'), { recursive: true });
+  }
+}
+
 function patchManifest(app, dir, secure) {
   const path = join(dir, 'android/app/src/main/AndroidManifest.xml');
   let xml = readFileSync(path, 'utf8');
@@ -78,11 +91,26 @@ function patchManifest(app, dir, secure) {
             </intent-filter>`);
   }
 
-  // Android 11+: чтобы видеть, какие ещё приложения Hub установлены.
-  if (!xml.includes('<queries>')) {
+  // Android 11+: чтобы видеть, какие ещё приложения Hub (и для Boost — какие игры) установлены.
+  xml = xml.replace(/\s*<queries>[\s\S]*?<\/queries>\n?/, '\n');
+  {
     const others = Object.entries(APPS).filter(([k]) => k !== app).map(([, a]) => a.scheme);
     const intents = others.map((s) => `        <intent>\n            <action android:name="android.intent.action.VIEW" />\n            <data android:scheme="${s}" />\n        </intent>`).join('\n');
-    xml = xml.replace('<application', `<queries>\n${intents}\n    </queries>\n\n    <application`);
+    const games = app === 'boost' ? GAMES.flatMap((g) => g.android ?? []).map((pkg) => `\n        <package android:name="${pkg}" />`).join('') : '';
+    xml = xml.replace('<application', `<queries>\n${intents}${games}\n    </queries>\n\n    <application`);
+  }
+
+  // VPN-сервис ускорителя.
+  if (app === 'boost' && !xml.includes('BoostVpnService')) {
+    xml = xml.replace('</application>', `    <service
+            android:name=".BoostVpnService"
+            android:permission="android.permission.BIND_VPN_SERVICE"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.net.VpnService" />
+            </intent-filter>
+        </service>
+    </application>`);
   }
 
   // Тестовые сборки разрешают http, чтобы подключаться к серверу на компьютере в той же Wi-Fi-сети.
@@ -165,6 +193,7 @@ for (const app of targets) {
   const cap = join(ROOT, 'node_modules/@capacitor/cli/bin/capacitor');
   if (!existsSync(join(dir, 'android'))) run(process.execPath, [cap, 'add', 'android'], dir);
   run(process.execPath, [cap, 'sync', 'android'], dir);
+  copyNative(app, dir);
   patchManifest(app, dir, secure);
   patchIcons(app, dir);
 
@@ -174,7 +203,8 @@ for (const app of targets) {
       process.exit(1);
     }
     const android = join(dir, 'android');
-    run(join(android, 'gradlew'), ['assembleDebug', '--no-daemon', '-q'], android);
+    const tasks = existsSync(join(MOBILE, 'native', app, 'test')) ? ['testDebugUnitTest', 'assembleDebug'] : ['assembleDebug'];
+    run(join(android, 'gradlew'), [...tasks, '--no-daemon', '-q'], android);
     const apk = join(android, 'app/build/outputs/apk/debug/app-debug.apk');
     const out = join(MOBILE, 'dist', `hub-${app}-debug.apk`);
     copyFileSync(apk, out);

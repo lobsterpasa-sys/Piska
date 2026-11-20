@@ -352,9 +352,12 @@ export function createHub(options = {}) {
       target = String(req.body.target);
     }
     linkApp(req.user.id, 'boost');
-    const sessionToken = target ? signToken({ sub: req.user.id, kind: 'boost', game: game.id, node: node.id, target }, secret, BOOST_TTL) : null;
+    // Токен без target — для мобильного приложения (режим мультиплекса), с target — для одного сервера.
+    const sessionToken = signToken({ sub: req.user.id, kind: 'boost', game: game.id, node: node.id, ...(target ? { target } : {}) }, secret, BOOST_TTL);
+    // Встроенный узел работает на том же сервере: телефону нужен его внешний адрес, а не 127.0.0.1.
+    const host = node.id === 'local' && embeddedRelay ? (env.RELAY_PUBLIC_HOST ?? req.hostname) : node.host;
     res.json({
-      game, node: { id: node.id, name: node.name, region: node.region, host: node.host, udpPort: node.udpPort },
+      game, node: { id: node.id, name: node.name, region: node.region, host, udpPort: node.udpPort },
       sessionToken, expiresIn: BOOST_TTL, multipath: req.plan.limits.boostMultipath,
     });
   });
@@ -378,7 +381,7 @@ export function createHub(options = {}) {
     get relay() { return relay; },
     async start(port = Number(env.PORT ?? 3000), host = env.HOST ?? '0.0.0.0') {
       if (embeddedRelay) {
-        relay = new UdpRelay({ secret, port: options.relayPort ?? Number(env.RELAY_PORT ?? 40000), host: '127.0.0.1' });
+        relay = new UdpRelay({ secret, port: options.relayPort ?? Number(env.RELAY_PORT ?? 40000), host: env.RELAY_HOST ?? '0.0.0.0', allowPrivate: allowPrivateTargets });
         const relayPort = await relay.start();
         nodes = nodes.map((n) => (n.id === 'local' ? { ...n, udpPort: relayPort } : n));
       }

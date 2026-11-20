@@ -139,3 +139,114 @@ test('вспомогательные функции адресов и конфи
   assert.equal(loadNodes({})[0].id, 'local');
   assert.throws(() => loadNodes({ BOOST_NODES: '{}' }));
 });
+
+// ---------- Режим мультиплекса (мобильное приложение) ----------
+import { UdpRelay } from '../server/src/boost/relay.js';
+import { signToken } from '../server/src/auth.js';
+
+const frame = (ip, port, appPort, data) => {
+  const h = Buffer.alloc(9);
+  h[0] = 0x01;
+  ip.split('.').forEach((o, i) => { h[1 + i] = Number(o); });
+  h.writeUInt16BE(port, 5);
+  h.writeUInt16BE(appPort, 7);
+  return Buffer.concat([h, Buffer.from(data)]);
+};
+const parse = (buf) => ({ ip: [...buf.subarray(1, 5)].join('.'), port: buf.readUInt16BE(5), appPort: buf.readUInt16BE(7), data: buf.subarray(9).toString() });
+
+function rawUdp() {
+  const s = dgram.createSocket('udp4');
+  const inbox = []; const waiters = [];
+  s.on('message', (m) => { const w = waiters.shift(); if (w) w(m); else inbox.push(m); });
+  return {
+    send: (data, port) => new Promise((r) => s.send(data, port, '127.0.0.1', r)),
+    recv: (timeout = 2000) => (inbox.length ? Promise.resolve(inbox.shift()) : new Promise((resolve, reject) => {
+      const w = (m) => { clearTimeout(t); resolve(m); };
+      const t = setTimeout(() => { waiters.splice(waiters.indexOf(w), 1); reject(new Error('udp timeout')); }, timeout);
+      waiters.push(w);
+    })),
+    close: () => s.close(),
+  };
+}
+
+test('мультиплекс: один клиент — несколько игровых серверов, ответы с адресом источника', async (t) => {
+  const relay = new UdpRelay({ secret: 's', port: 0, host: '127.0.0.1', allowPrivate: true });
+  const port = await relay.start();
+  const g1 = await fakeGameServer();
+  const g2 = await fakeGameServer();
+  const c = rawUdp();
+  t.after(async () => { c.close(); g1.close(); g2.close(); await relay.stop(); });
+
+  await c.send(`HELLO2 ${signToken({ sub: 7, kind: 'boost', game: 'standoff2' }, 's', 60)}`, port);
+  assert.equal((await c.recv()).toString(), 'OK2');
+
+  await c.send(frame('127.0.0.1', g1.address().port, 50001, 'shot'), port);
+  const r1 = parse(await c.recv());
+  assert.deepEqual(r1, { ip: '127.0.0.1', port: g1.address().port, appPort: 50001, data: 'PONG:shot' });
+
+  await c.send(frame('127.0.0.1', g2.address().port, 50002, 'move'), port);
+  const r2 = parse(await c.recv());
+  assert.equal(r2.port, g2.address().port);
+  assert.equal(r2.appPort, 50002);
+  assert.equal(r2.data, 'PONG:move');
+
+  // Пинг до узла
+  const ping = Buffer.from([0x02, 1, 2, 3, 4, 5, 6, 7, 8]);
+  await c.send(ping, port);
+  assert.deepEqual(await c.recv(), ping);
+
+  const session = [...relay.sessions.values()][0];
+  assert.equal(session.flows.size, 2);
+  assert.ok(session.stats.up > 0 && session.stats.down > 0);
+});
+
+test('мультиплекс: внутренние адреса запрещены, число потоков ограничено', async (t) => {
+  const relay = new UdpRelay({ secret: 's', port: 0, host: '127.0.0.1', maxFlows: 2 });
+  const port = await relay.start();
+  const c = rawUdp();
+  t.after(async () => { c.close(); await relay.stop(); });
+  await c.send(`HELLO2 ${signToken({ sub: 1, kind: 'boost' }, 's', 60)}`, port);
+  assert.equal((await c.recv()).toString(), 'OK2');
+
+  await c.send(frame('127.0.0.1', 9, 1000, 'x'), port);
+  await c.send(frame('192.168.0.1', 9, 1000, 'x'), port);
+  await new Promise((r) => setTimeout(r, 100));
+  const session = [...relay.sessions.values()][0];
+  assert.equal(session.flows.size, 0, 'во внутренние сети ничего не отправлено');
+
+  for (const p of [9001, 9002, 9003]) await c.send(frame('8.8.8.8', p, 1000, 'x'), port);
+  await new Promise((r) => setTimeout(r, 100));
+  assert.equal(session.flows.size, 2, 'старые потоки вытесняются');
+  assert.ok(!session.flows.has('1000>8.8.8.8:9001'));
+
+  // Чужой токен не открывает сессию
+  const other = rawUdp();
+  t.after(() => other.close());
+  await other.send(`HELLO2 ${signToken({ sub: 1, kind: 'session' }, 's', 60)}`, port);
+  assert.equal((await other.recv()).toString(), 'ERR bad-token');
+});
+
+test('сессия для мобильного приложения: токен без target, внешний адрес узла', async () => {
+  const { token } = await register(ctx.base, 'gamer_mobile');
+  const r = await http(ctx.base, '/api/boost/session', { method: 'POST', token, body: { gameId: 'standoff2', nodeId: 'local' } });
+  assert.equal(r.status, 200);
+  assert.ok(r.body.sessionToken);
+  assert.deepEqual(r.body.game.android, ['com.axlebolt.standoff2']);
+  assert.equal(r.body.node.host, '127.0.0.1', 'адрес, по которому клиент обратился к серверу');
+});
+
+test('мультиплекс: повторное приветствие сохраняет активные потоки', async (t) => {
+  const relay = new UdpRelay({ secret: 's', port: 0, host: '127.0.0.1', allowPrivate: true });
+  const port = await relay.start();
+  const g = await fakeGameServer();
+  const c = rawUdp();
+  t.after(async () => { c.close(); g.close(); await relay.stop(); });
+  const hello = `HELLO2 ${signToken({ sub: 3, kind: 'boost' }, 's', 60)}`;
+  await c.send(hello, port);
+  await c.recv();
+  await c.send(frame('127.0.0.1', g.address().port, 1234, 'a'), port);
+  await c.recv();
+  await c.send(hello, port);
+  assert.equal((await c.recv()).toString(), 'OK2');
+  assert.equal([...relay.sessions.values()][0].flows.size, 1);
+});
