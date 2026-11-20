@@ -1,0 +1,12 @@
+{
+  "appId": "app.hub.watch",
+  "appName": "Hub Watch",
+  "webDir": "www",
+  "backgroundColor": "#0b0d14",
+  "android": {
+    "allowMixedContent": true
+  },
+  "server": {
+    "androidScheme": "https"
+  }
+}

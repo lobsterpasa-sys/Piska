@@ -4,6 +4,26 @@
  */
 const TOKEN_KEY = 'hub.token';
 
+/**
+ * В мобильном приложении (Capacitor) страницы лежат внутри приложения, а API — на сервере.
+ * Сборка кладёт рядом config.js: window.HUB_CONFIG = { native, app, apiBase }.
+ */
+export const CONFIG = window.HUB_CONFIG ?? {};
+export const IS_NATIVE = Boolean(CONFIG.native);
+const API_BASE = String(CONFIG.apiBase ?? '').replace(/\/$/, '');
+export const apiUrl = (path) => API_BASE + path;
+/** Публичная ссылка (для приглашений): ведёт на сайт, даже если открыто из приложения. */
+export const publicUrl = (path) => (API_BASE || location.origin) + path;
+const schemeOf = (app) => `hub${app}`;
+
+/** Адрес страницы: на сайте — /voice, в приложении — свой файл или другое приложение Hub. */
+export function pageUrl(app) {
+  if (!IS_NATIVE) return app === 'account' ? '/' : `/${app}`;
+  if (app === 'account') return '/account.html';
+  if (app === CONFIG.app) return `/${app}/index.html`;
+  return `${schemeOf(app)}://open`;
+}
+
 const storage = {
   get(k) { try { return localStorage.getItem(k); } catch { return null; } },
   set(k, v) { try { localStorage.setItem(k, v); } catch { /* приватный режим */ } },
@@ -20,13 +40,13 @@ export const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&a
 
 export function getToken() { return storage.get(TOKEN_KEY); }
 export function setToken(t) { storage.set(TOKEN_KEY, t); }
-export function logout() { storage.del(TOKEN_KEY); location.href = '/'; }
+export function logout() { storage.del(TOKEN_KEY); location.href = pageUrl('account'); }
 
 export async function api(path, { method = 'GET', body } = {}) {
   const headers = { 'Content-Type': 'application/json' };
   const token = getToken();
   if (token) headers.Authorization = `Bearer ${token}`;
-  const res = await fetch(path, { method, headers, body: body ? JSON.stringify(body) : undefined });
+  const res = await fetch(apiUrl(path), { method, headers, body: body ? JSON.stringify(body) : undefined });
   const data = res.status === 204 ? {} : await res.json().catch(() => ({}));
   if (!res.ok) {
     const err = new Error(data.error || `Ошибка ${res.status}`);
@@ -124,8 +144,9 @@ export async function ensureLogin(appName) {
   const overlay = document.createElement('div');
   overlay.className = 'overlay';
   const meta = APP_META[appName];
-  overlay.innerHTML = `<div class="card"><h2>${meta.icon} ${meta.title}</h2><p class="muted">Войдите в аккаунт Hub, чтобы продолжить.</p><div class="auth"></div></div>`;
+  overlay.innerHTML = `<div class="card"><h2>${meta.icon} ${meta.title}</h2><p class="muted">Войдите в аккаунт Hub, чтобы продолжить.</p><div class="sso"></div><div class="auth"></div></div>`;
   document.body.append(overlay);
+  if (IS_NATIVE) nativeSsoButtons(overlay.querySelector('.sso'), appName);
   const account = await authForm(overlay.querySelector('.auth'), appName);
   overlay.remove();
   return account;
@@ -136,14 +157,14 @@ export function renderTopbar(appName, account) {
   bar.className = 'topbar';
   const premium = account?.plan?.id === 'premium';
   bar.innerHTML = `
-    <a class="brand" href="/"><span class="dot"></span>Hub</a>
+    <a class="brand" href="${pageUrl('account')}"><span class="dot"></span>Hub</a>
     <nav class="appnav">
-      ${Object.entries(APP_META).map(([k, m]) => `<a href="/${k}" class="${k === appName ? 'active' : ''}">${m.icon} ${m.title}</a>`).join('')}
+      ${Object.entries(APP_META).map(([k, m]) => `<a href="${pageUrl(k)}" class="${k === appName ? 'active' : ''}">${m.icon} ${m.title}</a>`).join('')}
     </nav>
     <div class="spacer"></div>
     ${account ? `<div class="userchip">
       <span class="badge ${premium ? 'premium' : ''}">${premium ? 'Premium' : 'Free'}</span>
-      <a href="/" style="color:inherit;text-decoration:none" data-testid="username">${esc(account.user.username)}</a>
+      <a href="${pageUrl('account')}" style="color:inherit;text-decoration:none" data-testid="username">${esc(account.user.username)}</a>
     </div>` : ''}`;
   document.body.prepend(bar);
   return bar;
@@ -161,8 +182,8 @@ export class Realtime {
   }
 
   #connect() {
-    const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-    this.ws = new WebSocket(`${proto}://${location.host}/ws`);
+    const base = API_BASE || `${location.protocol}//${location.host}`;
+    this.ws = new WebSocket(`${base.replace(/^http/, 'ws')}/ws`);
     this.ws.addEventListener('open', () => {
       this.retry = 0;
       this.ws.send(JSON.stringify({ type: 'auth', token: getToken() }));
@@ -187,11 +208,11 @@ export class Realtime {
         if (ev.reason === 'password-changed') {
           // Если пароль сменили на этом устройстве, здесь уже сохранён новый токен: просто переподключаемся.
           setTimeout(async () => {
-            try { await api('/api/me'); this.#connect(); } catch { storage.del(TOKEN_KEY); location.href = '/'; }
+            try { await api('/api/me'); this.#connect(); } catch { storage.del(TOKEN_KEY); location.href = pageUrl('account'); }
           }, 1500);
         } else if (['account-deleted', 'unauthorized'].includes(ev.reason)) {
           storage.del(TOKEN_KEY);
-          location.href = '/';
+          location.href = pageUrl('account');
         }
         return;
       }
@@ -263,7 +284,8 @@ export function getRealtime() {
 }
 
 export function roomLink(app, room) {
-  return `/${app}#room=${encodeURIComponent(room)}&join=1`;
+  if (IS_NATIVE && app !== CONFIG.app) return `${schemeOf(app)}://room?name=${encodeURIComponent(room)}`;
+  return `${pageUrl(app)}#room=${encodeURIComponent(room)}&join=1`;
 }
 
 const APP_LABEL = { voice: '🎧 Voice', watch: '🍿 Watch' };
@@ -317,7 +339,7 @@ export function mountFriends(topbar, { inviteTarget = () => null } = {}) {
           <span class="presence ${f.online ? 'on' : ''}"></span>
           <div class="grow" style="min-width:0"><b>${esc(f.username)}</b><div>${where}</div></div>
           ${f.online && target ? `<button class="btn sm" data-invite="${f.id}">Позвать</button>` : ''}
-          ${f.online && act?.room && !target ? `<a class="btn ghost sm" href="${roomLink(act.app, act.room)}">Зайти</a>` : ''}
+          ${f.online && act?.room && !target ? `<button class="btn ghost sm" data-go="${esc(roomLink(act.app, act.room))}">Зайти</button>` : ''}
           <button class="btn ghost sm" data-remove="${f.id}" title="Удалить из друзей" aria-label="Удалить">✕</button>
         </div>`;
       })),
@@ -336,6 +358,7 @@ export function mountFriends(topbar, { inviteTarget = () => null } = {}) {
     if (!t) return;
     try {
       if (t.dataset.close !== undefined) panel.classList.add('hidden');
+      else if (t.dataset.go) goTo(t.dataset.go);
       else if (t.dataset.accept) { data = await api(`/api/friends/${t.dataset.accept}/accept`, { method: 'POST' }); render(); }
       else if (t.dataset.remove) {
         if (!confirm('Удалить?')) return;
@@ -367,7 +390,7 @@ export function mountFriends(topbar, { inviteTarget = () => null } = {}) {
   });
   rt.on('invite', (m) => {
     toast(`${m.from.username} зовёт вас в ${APP_LABEL[m.app]}${m.private ? '' : `: ${m.room}`}`, '', {
-      label: 'Зайти', onClick: () => { location.href = roomLink(m.app, m.room); if (location.pathname === `/${m.app}`) location.reload(); },
+      label: 'Зайти', onClick: () => goTo(roomLink(m.app, m.room)),
     });
   });
   rt.on('invite:sent', () => toast('Приглашение отправлено'));
@@ -375,4 +398,91 @@ export function mountFriends(topbar, { inviteTarget = () => null } = {}) {
 
   friendsInstance = { btn, refresh, render, open: () => { panel.classList.remove('hidden'); refresh(); } };
   return friendsInstance;
+}
+
+/** Переход по ссылке; если это та же страница с другим #, перезагружаем её (для автовхода в комнату). */
+export function goTo(url) {
+  const sameDoc = url.startsWith('/') && url.split('#')[0] === location.pathname;
+  if (IS_NATIVE && /^hub\w+:\/\//.test(url)) { openExternal(url); return; }
+  location.href = url;
+  if (sameDoc) location.reload();
+}
+
+// ---------- Мобильное приложение: вход через другое приложение Hub и глубокие ссылки ----------
+
+const plugins = () => window.Capacitor?.Plugins ?? {};
+
+function openExternal(url) {
+  const launcher = plugins().AppLauncher;
+  if (launcher) return launcher.openUrl({ url }).catch(() => toast('Приложение не установлено', 'bad'));
+  location.href = url;
+}
+
+/** Кнопки «Войти через Hub Voice/Watch/Boost» — только для установленных приложений. */
+async function nativeSsoButtons(box, appName) {
+  const launcher = plugins().AppLauncher;
+  if (!launcher) return;
+  for (const [k, m] of Object.entries(APP_META)) {
+    if (k === appName) continue;
+    let installed = false;
+    try { installed = (await launcher.canOpenUrl({ url: `${schemeOf(k)}://open` })).value; } catch { /* нет доступа */ }
+    if (!installed) continue;
+    const b = document.createElement('button');
+    b.className = 'btn ghost';
+    b.style.cssText = 'width:100%;margin-bottom:8px';
+    b.textContent = `${m.icon} Войти через Hub ${m.title}`;
+    b.addEventListener('click', () => openExternal(`${schemeOf(k)}://sso?for=${appName}`));
+    box.append(b);
+  }
+  if (box.children.length) box.insertAdjacentHTML('beforeend', '<p class="muted small" style="text-align:center">или</p>');
+}
+
+/** Разбор ссылок вида hubvoice://sso?for=watch (не полагаемся на URL() для нестандартных схем). */
+export function parseDeepLink(url) {
+  const m = /^hub(\w+):\/\/([^/?#]+)\/?(?:\?([^#]*))?/.exec(String(url));
+  if (!m) return null;
+  return { app: m[1], action: m[2], params: new URLSearchParams(m[3] ?? '') };
+}
+
+export async function handleDeepLink(url) {
+  const link = parseDeepLink(url);
+  if (!link || link.app !== CONFIG.app) return;
+  const { action, params } = link;
+  if (action === 'open') { if (location.pathname !== pageUrl(CONFIG.app)) location.href = pageUrl(CONFIG.app); return; }
+  if (action === 'room') { goTo(roomLink(CONFIG.app, params.get('name') ?? '')); return; }
+  if (action === 'sso') {
+    // Другое приложение Hub просит войти в этот же аккаунт.
+    const target = params.get('for');
+    if (!APP_META[target] || target === CONFIG.app) return;
+    if (!getToken()) { toast('Сначала войдите в аккаунт здесь', 'bad'); return; }
+    try {
+      const me = await api('/api/me');
+      if (!confirm(`Войти в Hub ${APP_META[target].title} как ${me.user.username}?`)) return;
+      const { code } = await api('/api/auth/sso/code', { method: 'POST', body: { app: target } });
+      openExternal(`${schemeOf(target)}://sso-callback?code=${encodeURIComponent(code)}`);
+    } catch (e) { toast(e.message, 'bad'); }
+    return;
+  }
+  if (action === 'sso-callback') {
+    try {
+      const data = await api('/api/auth/sso/exchange', { method: 'POST', body: { code: params.get('code'), app: CONFIG.app } });
+      setToken(data.token);
+      location.href = pageUrl(CONFIG.app);
+    } catch (e) { toast(e.message, 'bad'); }
+  }
+}
+
+if (IS_NATIVE) {
+  const { App } = plugins();
+  App?.addListener('appUrlOpen', ({ url }) => handleDeepLink(url));
+  App?.getLaunchUrl?.().then((r) => {
+    // Обрабатываем ссылку запуска один раз за запуск приложения.
+    if (r?.url && sessionStorage.getItem('hub.launch') !== r.url) { sessionStorage.setItem('hub.launch', r.url); handleDeepLink(r.url); }
+  }).catch(() => {});
+  App?.addListener('backButton', ({ canGoBack }) => {
+    const drawer = document.querySelector('.drawer:not(.hidden)');
+    if (drawer) drawer.classList.add('hidden');
+    else if (canGoBack) history.back();
+    else App.minimizeApp?.();
+  });
 }

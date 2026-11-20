@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Hub Voice</string>
+    <string name="title_activity_main">Hub Voice</string>
+    <string name="package_name">app.hub.voice</string>
+    <string name="custom_url_scheme">app.hub.voice</string>
+</resources>

@@ -1,0 +1,10 @@
+{
+  "name": "hub-watch-mobile",
+  "private": true,
+  "dependencies": {
+    "@capacitor/android": "^7.6.10",
+    "@capacitor/app": "^7.1.2",
+    "@capacitor/app-launcher": "^7.0.4",
+    "@capacitor/core": "^7.6.10"
+  }
+}

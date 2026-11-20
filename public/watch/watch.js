@@ -1,4 +1,4 @@
-import { api, ensureLogin, renderTopbar, getRealtime, mountFriends, chatWidget, toast, esc, initials, colorFor } from '/shared/hub.js';
+import { api, ensureLogin, renderTopbar, getRealtime, mountFriends, chatWidget, toast, esc, initials, colorFor, publicUrl } from '/shared/hub.js';
 import { VoiceEngine } from '/shared/voice-engine.js';
 
 const $ = (id) => document.getElementById(id);
@@ -293,7 +293,7 @@ $('host-only').addEventListener('change', (e) => rt.send({ type: 'watch:control'
 $('call-friends').addEventListener('click', () => friends.open());
 $('leave').addEventListener('click', leaveRoom);
 $('invite').addEventListener('click', async () => {
-  const link = `${location.origin}/watch#room=${encodeURIComponent(roomName)}&join=1`;
+  const link = `${publicUrl('/watch')}#room=${encodeURIComponent(roomName)}&join=1`;
   try { await navigator.clipboard.writeText(link); toast('Ссылка скопирована'); } catch { prompt('Ссылка-приглашение:', link); }
 });
 

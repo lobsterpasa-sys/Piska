@@ -1,0 +1,12 @@
+{
+  "appId": "app.hub.boost",
+  "appName": "Hub Boost",
+  "webDir": "www",
+  "backgroundColor": "#0b0d14",
+  "android": {
+    "allowMixedContent": true
+  },
+  "server": {
+    "androidScheme": "https"
+  }
+}

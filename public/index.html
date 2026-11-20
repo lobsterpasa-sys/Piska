@@ -10,7 +10,7 @@
 <body data-app="voice">
   <main class="container" id="root"></main>
   <script type="module">
-    import { api, getToken, setToken, authForm, renderTopbar, mountFriends, logout, APP_META, esc, toast } from '/shared/hub.js';
+    import { api, getToken, setToken, authForm, renderTopbar, mountFriends, logout, pageUrl, APP_META, esc, toast } from '/shared/hub.js';
 
     const root = document.getElementById('root');
     const fmtDate = (ms) => new Date(ms).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' });
@@ -18,7 +18,7 @@
     function appCards(linked = []) {
       return Object.entries(APP_META).map(([k, m]) => {
         const on = linked.some((a) => a.app === k);
-        return `<a class="card app-card" href="/${k}" data-testid="app-${k}" style="--accent:${k === 'voice' ? '#7c5cff' : k === 'watch' ? '#ff4f8b' : '#19d38a'}">
+        return `<a class="card app-card" href="${pageUrl(k)}" data-testid="app-${k}" style="--accent:${k === 'voice' ? '#7c5cff' : k === 'watch' ? '#ff4f8b' : '#19d38a'}">
           <div class="app-icon">${m.icon}</div>
           <h3>${m.title}</h3>
           <div class="muted small">${m.desc}</div>

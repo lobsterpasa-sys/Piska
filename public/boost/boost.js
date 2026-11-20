@@ -1,4 +1,4 @@
-import { api, ensureLogin, renderTopbar, mountFriends, toast, esc } from '/shared/hub.js';
+import { api, ensureLogin, renderTopbar, mountFriends, toast, esc, apiUrl, pageUrl } from '/shared/hub.js';
 
 const $ = (id) => document.getElementById(id);
 const account = await ensureLogin('boost');
@@ -45,7 +45,7 @@ export function summarize(samples) {
   return { ping, jitter, loss };
 }
 
-const probeUrl = (n) => n.probeUrl ?? '/api/boost/probe';
+const probeUrl = (n) => n.probeUrl ?? apiUrl('/api/boost/probe');
 
 async function measure(node, count = 10) {
   await probeOnce(probeUrl(node)); // прогрев соединения
@@ -84,7 +84,7 @@ function renderNodes() {
       <div class="metric hide-sm ${cls(r?.jitter, 10, 30)}">${r?.jitter != null ? Math.round(r.jitter) : '—'}<small>джиттер</small></div>
       <div class="metric hide-sm ${cls(r ? r.loss * 100 : null, 0, 2)}">${r ? Math.round(r.loss * 100) + '%' : '—'}<small>потери</small></div>
       ${n.locked
-        ? '<a class="btn sm gold" href="/">🔒</a>'
+        ? `<a class="btn sm gold" href="${pageUrl('account')}">🔒</a>`
         : `<button class="btn sm ${n.id === selectedNode ? '' : 'ghost'}" data-node="${n.id}">${n.id === selectedNode ? '✓' : 'Выбрать'}</button>`}
     </div>`;
   }).join('');
