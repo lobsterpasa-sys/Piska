@@ -41,6 +41,17 @@ export function openDb(file = ':memory:') {
       last_used_at  INTEGER NOT NULL,
       PRIMARY KEY (user_id, app)
     );
+    CREATE TABLE IF NOT EXISTS friendships (
+      requester_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      addressee_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      status       TEXT NOT NULL CHECK (status IN ('pending', 'accepted')),
+      created_at   INTEGER NOT NULL,
+      PRIMARY KEY (requester_id, addressee_id)
+    );
+    CREATE INDEX IF NOT EXISTS friendships_addressee ON friendships(addressee_id);
   `);
+  // Миграция для баз, созданных до появления token_version.
+  const cols = db.prepare('PRAGMA table_info(users)').all().map((c) => c.name);
+  if (!cols.includes('token_version')) db.exec('ALTER TABLE users ADD COLUMN token_version INTEGER NOT NULL DEFAULT 0');
   return db;
 }

@@ -1,8 +1,12 @@
-import { api, ensureLogin, renderTopbar, Realtime, chatWidget, toast, esc, initials, colorFor } from '/shared/hub.js';
+import { api, ensureLogin, renderTopbar, getRealtime, mountFriends, chatWidget, toast, esc, initials, colorFor } from '/shared/hub.js';
+import { VoiceEngine } from '/shared/voice-engine.js';
 
 const $ = (id) => document.getElementById(id);
 const account = await ensureLogin('watch');
-renderTopbar('watch', account);
+const topbar = renderTopbar('watch', account);
+const rt = getRealtime();
+let roomName = null;
+const friends = mountFriends(topbar, { inviteTarget: () => (roomName && !$('room-view').classList.contains('hidden') ? 'watch' : null) });
 
 const DRIFT_LIMIT = 1.5; // секунд — если расхождение больше, перематываем
 
@@ -128,17 +132,15 @@ class Player {
 }
 
 // ---------- Комната ----------
-let rt = null;
-let roomName = null;
 let state = null; // последнее состояние комнаты
 let recvAt = 0;
 let chat = null;
 
 const expectedPosition = () => (state ? state.position + (state.playing ? (performance.now() - recvAt) / 1000 : 0) : 0);
-const isHost = () => state && rt && state.hostId === rt.selfId;
+const isHost = () => state && state.hostId === rt.selfId;
 
 const player = new Player($('player'), (action, position) => {
-  if (!rt) return;
+  if (!roomName) return;
   if (action === 'ended') { if (isHost()) rt.send({ type: 'watch:control', action: 'next' }); return; }
   rt.send({ type: 'watch:control', action, position });
 });
@@ -158,9 +160,9 @@ async function applyState(s) {
 
 function renderMembers() {
   $('members').innerHTML = state.members.map((m) => `
-    <span class="member" data-member="${esc(m.id)}">
+    <span class="member ${voiceSpeaking.has(m.id) ? 'speaking' : ''}" data-member="${esc(m.id)}">
       <span class="avatar" style="background:${colorFor(m.username)}">${esc(initials(m.username))}</span>
-      ${esc(m.username)}${m.id === state.hostId ? ' 👑' : ''}${m.premium ? ' ⭐' : ''}
+      ${esc(m.username)}${m.id === state.hostId ? ' 👑' : ''}${m.premium ? ' ⭐' : ''}${voiceMembers.has(m.id) ? ' 🎙' : ''}
     </span>`).join('');
 }
 
@@ -178,43 +180,99 @@ setInterval(() => {
   }
 }, 2000);
 
-function joinRoom(name, password = '') {
-  roomName = name;
-  rt = new Realtime();
-  rt.on('ready', () => rt.send({ type: 'watch:join', room: roomName, password }));
-  rt.on('error', (m) => {
-    toast(m.message, 'bad');
-    if (['room-full', 'bad-password', 'premium-required', 'bad-room'].includes(m.code) && $('room-view').classList.contains('hidden')) {
-      rt.close(); rt = null;
-    }
-  });
-  rt.on('watch:joined', (m) => {
-    $('lobby').classList.add('hidden');
-    $('room-view').classList.remove('hidden');
-    $('room-title').textContent = `# ${m.room}${m.private ? ' 🔒' : ''}`;
-    location.hash = `room=${encodeURIComponent(m.room)}`;
+// Обработчики регистрируются один раз: соединение общее и переподключается само.
+rt.on('ready', () => { if (roomName) rt.send({ type: 'watch:join', room: roomName, password: roomPassword }); });
+rt.on('error', (m) => {
+  toast(m.message, 'bad');
+  if (['room-full', 'bad-password', 'premium-required', 'bad-room'].includes(m.code) && $('room-view').classList.contains('hidden')) roomName = null;
+});
+rt.on('watch:joined', (m) => {
+  $('lobby').classList.add('hidden');
+  $('room-view').classList.remove('hidden');
+  $('room-title').textContent = `# ${m.room}${m.private ? ' 🔒' : ''}`;
+  history.replaceState(null, '', `#room=${encodeURIComponent(m.room)}`);
+  if (!chat) {
     chat = chatWidget($('chat'), (text) => rt.send({ type: 'watch:chat', text }));
     chat.system(`Вы в комнате ${m.room} (мест: ${m.capacity})`);
-  });
-  rt.on('watch:state', (s) => {
-    if (s.by && s.by !== account.user.username && chat) {
-      const what = { load: 'включил новое видео', play: 'продолжил', pause: 'поставил на паузу', seek: 'перемотал', 'queue-add': 'добавил видео в очередь', next: 'включил следующее' }[s.action];
-      if (what) chat.system(`${s.by} ${what}`);
-    }
-    applyState(s).catch((e) => toast(e.message, 'bad'));
-  });
-  rt.on('watch:chat', (m) => chat?.add(m.from.username, m.text));
+  }
+  friends.render();
+});
+rt.on('watch:state', (s) => {
+  if (s.by && s.by !== account.user.username && chat) {
+    const what = { load: 'включил новое видео', play: 'продолжил', pause: 'поставил на паузу', seek: 'перемотал', 'queue-add': 'добавил видео в очередь', next: 'включил следующее' }[s.action];
+    if (what) chat.system(`${s.by} ${what}`);
+  }
+  applyState(s).catch((e) => toast(e.message, 'bad'));
+});
+rt.on('watch:chat', (m) => chat?.add(m.from.username, m.text));
+
+// ---------- Голосовой чат в комнате (как в Rave) ----------
+const engine = new VoiceEngine({ rt, limits: account.plan.limits });
+window.__voicePeers = engine.peers;
+const voiceMembers = new Set();
+const voiceSpeaking = new Set();
+const markVoice = () => { if (state) renderMembers(); };
+engine.addEventListener('joined', ({ detail: m }) => {
+  voiceMembers.clear();
+  voiceMembers.add(m.selfId);
+  m.peers.forEach((p) => voiceMembers.add(p.id));
+  chat?.system('Голосовой чат включён 🎙');
+  markVoice();
+});
+engine.addEventListener('peer-joined', ({ detail: p }) => { voiceMembers.add(p.id); markVoice(); });
+engine.addEventListener('peer-left', ({ detail: { peerId } }) => { voiceMembers.delete(peerId); voiceSpeaking.delete(peerId); markVoice(); });
+engine.addEventListener('speaking', ({ detail: m }) => {
+  if (m.speaking) voiceSpeaking.add(m.peerId); else voiceSpeaking.delete(m.peerId);
+  document.querySelector(`[data-member="${m.peerId}"]`)?.classList.toggle('speaking', m.speaking);
+});
+engine.addEventListener('autoplay-blocked', () => toast('Нажмите в любом месте страницы, чтобы включить звук'));
+
+function setVoiceUi(on) {
+  $('voice-toggle').textContent = on ? '🎙 Выключить голос' : '🎙 Включить голос';
+  $('voice-toggle').classList.toggle('ghost', on);
+  $('voice-mute').classList.toggle('hidden', !on);
+}
+$('voice-toggle').addEventListener('click', async () => {
+  if (engine.active) {
+    engine.leave();
+    voiceMembers.clear();
+    voiceSpeaking.clear();
+    markVoice();
+    setVoiceUi(false);
+    return;
+  }
+  try {
+    await engine.join(roomName, '', { watch: true });
+    setVoiceUi(true);
+  } catch {
+    toast('Нет доступа к микрофону. Разрешите его в настройках браузера.', 'bad');
+  }
+});
+$('voice-mute').addEventListener('click', () => {
+  engine.setMuted(!engine.muted);
+  $('voice-mute').textContent = engine.muted ? '🎙' : '🔇';
+  $('voice-mute').title = engine.muted ? 'Включить микрофон' : 'Выключить микрофон';
+});
+
+let roomPassword = '';
+function joinRoom(name, password = '') {
+  roomName = name;
+  roomPassword = password;
+  rt.send({ type: 'watch:join', room: name, password });
 }
 
 function leaveRoom() {
-  rt?.send({ type: 'watch:leave' });
-  rt?.close();
-  rt = null;
+  if (engine.active) { engine.leave(); setVoiceUi(false); }
+  voiceMembers.clear();
+  rt.send({ type: 'watch:leave' });
+  roomName = null;
   state = null;
+  chat = null;
   player.clear();
   $('room-view').classList.add('hidden');
   $('lobby').classList.remove('hidden');
   history.replaceState(null, '', location.pathname);
+  friends.render();
   loadRooms();
 }
 
@@ -227,16 +285,21 @@ $('url-form').addEventListener('submit', (e) => {
   const action = e.submitter?.value ?? 'load';
   const url = e.target.url.value.trim();
   if (!url) return;
-  rt?.send({ type: 'watch:control', action, url });
+  rt.send({ type: 'watch:control', action, url });
   e.target.url.value = '';
 });
-$('next').addEventListener('click', () => rt?.send({ type: 'watch:control', action: 'next' }));
-$('host-only').addEventListener('change', (e) => rt?.send({ type: 'watch:control', action: 'host-only', value: e.target.checked }));
+$('next').addEventListener('click', () => rt.send({ type: 'watch:control', action: 'next' }));
+$('host-only').addEventListener('change', (e) => rt.send({ type: 'watch:control', action: 'host-only', value: e.target.checked }));
+$('call-friends').addEventListener('click', () => friends.open());
 $('leave').addEventListener('click', leaveRoom);
 $('invite').addEventListener('click', async () => {
-  const link = `${location.origin}/watch#room=${encodeURIComponent(roomName)}`;
+  const link = `${location.origin}/watch#room=${encodeURIComponent(roomName)}&join=1`;
   try { await navigator.clipboard.writeText(link); toast('Ссылка скопирована'); } catch { prompt('Ссылка-приглашение:', link); }
 });
 
-const fromHash = new URLSearchParams(location.hash.slice(1)).get('room');
-if (fromHash) $('room').value = fromHash;
+// Ссылка-приглашение или приглашение от друга: #room=имя&join=1
+const params = new URLSearchParams(location.hash.slice(1));
+if (params.get('room')) {
+  $('room').value = params.get('room');
+  if (params.get('join') === '1') joinRoom(params.get('room'));
+}

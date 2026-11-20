@@ -10,7 +10,7 @@
 <body data-app="voice">
   <main class="container" id="root"></main>
   <script type="module">
-    import { api, getToken, authForm, renderTopbar, logout, APP_META, esc, toast } from '/shared/hub.js';
+    import { api, getToken, setToken, authForm, renderTopbar, mountFriends, logout, APP_META, esc, toast } from '/shared/hub.js';
 
     const root = document.getElementById('root');
     const fmtDate = (ms) => new Date(ms).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' });
@@ -81,7 +81,7 @@
 
     async function renderAccount(account) {
       const { plans, paymentsMode } = await api('/api/plans');
-      renderTopbar(null, account);
+      const friends = mountFriends(renderTopbar(null, account));
       root.innerHTML = `
         <h1>Привет, ${esc(account.user.username)} 👋</h1>
         <p class="muted">Аккаунт Hub · ${esc(account.user.email)} · с ${fmtDate(account.user.createdAt)}</p>
@@ -90,7 +90,49 @@
         <h2 style="margin-top:32px">Подписка</h2>
         ${paymentsMode === 'test' ? '<p class="small" style="color:var(--warn)">Тестовый режим оплаты: подписка активируется без списания денег.</p>' : ''}
         <div class="grid cols-2" id="plans">${planCards(account, plans)}</div>
+        <h2 style="margin-top:32px">Друзья</h2>
+        <div class="card row wrap">
+          <p class="muted grow" style="margin:0">Друзья общие для всех приложений: видно, кто в сети и где сейчас, можно звать в комнаты Voice и Watch.</p>
+          <button class="btn" id="open-friends" data-testid="open-friends">👥 Открыть друзей</button>
+        </div>
+        <h2 style="margin-top:32px">Настройки</h2>
+        <div class="grid cols-2">
+          <form class="card" id="pw-form">
+            <h3>Сменить пароль</h3>
+            <label for="pw-cur">Текущий пароль</label>
+            <input id="pw-cur" name="current" type="password" autocomplete="current-password" required>
+            <label for="pw-new">Новый пароль (от 8 символов)</label>
+            <input id="pw-new" name="next" type="password" autocomplete="new-password" required minlength="8">
+            <p class="muted small">На остальных устройствах будет выполнен выход.</p>
+            <button class="btn">Сохранить</button>
+          </form>
+          <form class="card" id="del-form">
+            <h3>Удалить аккаунт</h3>
+            <p class="muted small">Аккаунт удалится во всех трёх приложениях вместе с друзьями и подпиской. Это нельзя отменить.</p>
+            <label for="del-pw">Пароль для подтверждения</label>
+            <input id="del-pw" name="password" type="password" autocomplete="current-password" required>
+            <button class="btn danger" style="margin-top:12px">Удалить навсегда</button>
+          </form>
+        </div>
         <div style="margin-top:32px"><button class="btn ghost" id="logout">Выйти из аккаунта</button></div>`;
+      document.getElementById('open-friends').addEventListener('click', () => friends.open());
+      document.getElementById('pw-form').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        try {
+          const r = await api('/api/account/password', { method: 'POST', body: Object.fromEntries(new FormData(e.target)) });
+          setToken(r.token);
+          e.target.reset();
+          toast('Пароль изменён');
+        } catch (err) { toast(err.message, 'bad'); }
+      });
+      document.getElementById('del-form').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        if (!confirm('Точно удалить аккаунт навсегда?')) return;
+        try {
+          await api('/api/account', { method: 'DELETE', body: Object.fromEntries(new FormData(e.target)) });
+          logout();
+        } catch (err) { toast(err.message, 'bad'); }
+      });
 
       root.querySelectorAll('[data-buy]').forEach((b) => b.addEventListener('click', async () => {
         try {

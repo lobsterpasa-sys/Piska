@@ -131,6 +131,16 @@ label { display: block; font-size: .85rem; color: var(--muted); margin: 10px 0 4
 ul.features { padding-left: 18px; margin: 8px 0; }
 ul.features li { margin: 4px 0; }
 
+.drawer {
+  position: fixed; top: 0; right: 0; bottom: 0; width: min(380px, 100%); z-index: 40;
+  background: var(--card); border-left: 1px solid var(--line); padding: 16px; overflow-y: auto;
+  box-shadow: -20px 0 40px rgba(0, 0, 0, .4); animation: slide .2s ease-out;
+}
+@keyframes slide { from { transform: translateX(30px); opacity: 0; } }
+.presence { width: 10px; height: 10px; border-radius: 50%; background: var(--line); flex: none; }
+.presence.on { background: var(--ok); box-shadow: 0 0 8px var(--ok); }
+.toast { display: flex; align-items: center; justify-content: space-between; }
+
 @media (max-width: 640px) {
   .appnav { display: none; }
   h1 { font-size: 1.5rem; }

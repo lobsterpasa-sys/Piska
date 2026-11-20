@@ -1,8 +1,8 @@
-import { api, ensureLogin, renderTopbar, toast, esc } from '/shared/hub.js';
+import { api, ensureLogin, renderTopbar, mountFriends, toast, esc } from '/shared/hub.js';
 
 const $ = (id) => document.getElementById(id);
 const account = await ensureLogin('boost');
-renderTopbar('boost', account);
+mountFriends(renderTopbar('boost', account));
 
 const PLATFORM = { pc: '💻 ПК', android: '🤖 Android', ios: '🍏 iOS', console: '🎮 Консоль' };
 const STORE_KEY = 'boost.last';

@@ -30,9 +30,29 @@ export function currentPosition(state, now = Date.now()) {
   return state.playing ? state.position + (now - state.updatedAt) / 1000 : state.position;
 }
 
-export function attachRealtime(server, { authenticate, onAppUsed, log = () => {} }) {
+export function attachRealtime(server, { authenticate, onAppUsed, friendIdsOf = () => [], areFriends = () => false, log = () => {} }) {
   const wss = new WebSocketServer({ server, path: '/ws', maxPayload: 64 * 1024 });
   const rooms = new Map(); // `${kind}:${id}` -> room
+  const byUser = new Map(); // userId -> Set<client> (один аккаунт может быть открыт в нескольких приложениях)
+
+  /** Где сейчас пользователь: для статуса «играет в Voice: squad» у друзей. */
+  function activityOf(userId) {
+    for (const c of byUser.get(userId) ?? []) {
+      for (const key of c.rooms) {
+        const room = rooms.get(key);
+        if (room && !room.linked) return { app: room.kind, room: room.password ? null : room.id, private: Boolean(room.password) };
+      }
+    }
+    return null;
+  }
+  const isOnline = (userId) => (byUser.get(userId)?.size ?? 0) > 0;
+  function notifyUser(userId, msg) {
+    for (const c of byUser.get(userId) ?? []) send(c, msg);
+  }
+  function announcePresence(userId) {
+    const msg = { type: 'presence', userId, online: isOnline(userId), activity: activityOf(userId) };
+    for (const fid of friendIdsOf(userId)) notifyUser(fid, msg);
+  }
 
   const send = (client, msg) => {
     if (client.ws.readyState === 1) client.ws.send(JSON.stringify(msg));
@@ -61,20 +81,30 @@ export function attachRealtime(server, { authenticate, onAppUsed, log = () => {}
   }
 
   function join(client, kind, msg) {
-    const id = String(msg.room ?? '');
-    if (!ROOM_ID_RE.test(id)) return send(client, { type: 'error', code: 'bad-room', message: 'Название комнаты: 1–40 символов, латиница, цифры, - и _' });
+    let id = String(msg.room ?? '');
+    let linkedWatch = null;
+    if (kind === 'voice' && msg.watch) {
+      // Голосовой чат внутри комнаты просмотра: доступен только её участникам.
+      linkedWatch = roomOf(client, 'watch');
+      if (!linkedWatch || linkedWatch.id !== id) return send(client, { type: 'error', code: 'not-in-room', message: 'Сначала зайдите в комнату просмотра' });
+      id = `@${id}`;
+    } else if (!ROOM_ID_RE.test(id)) {
+      return send(client, { type: 'error', code: 'bad-room', message: 'Название комнаты: 1–40 символов, латиница, цифры, - и _' });
+    }
     const key = `${kind}:${id}`;
     let room = rooms.get(key);
     if (!room) {
-      const wantsPrivate = Boolean(msg.password);
+      const wantsPrivate = !linkedWatch && Boolean(msg.password);
       if (wantsPrivate && !client.plan.limits.privateRooms) {
         return send(client, { type: 'error', code: 'premium-required', message: 'Приватные комнаты с паролем доступны в Premium' });
       }
       room = {
         key, kind, id,
         ownerId: client.user.id,
-        capacity: kind === 'voice' ? client.plan.limits.voiceRoomSize : client.plan.limits.watchRoomSize,
+        capacity: linkedWatch ? linkedWatch.capacity : kind === 'voice' ? client.plan.limits.voiceRoomSize : client.plan.limits.watchRoomSize,
+        linked: Boolean(linkedWatch),
         password: wantsPrivate ? String(msg.password) : null,
+        invited: new Set(), // друзья, приглашённые в приватную комнату, входят без пароля
         members: new Map(),
         hostId: client.id,
         state: kind === 'watch' ? { media: null, playing: false, position: 0, updatedAt: Date.now(), queue: [], hostOnly: false } : null,
@@ -83,7 +113,8 @@ export function attachRealtime(server, { authenticate, onAppUsed, log = () => {}
       rooms.set(key, room);
     } else {
       if (room.members.has(client.id)) return;
-      if (room.password && room.password !== String(msg.password ?? '')) {
+      const invited = room.invited.has(client.user.id);
+      if (room.password && !invited && room.password !== String(msg.password ?? '')) {
         return send(client, { type: 'error', code: 'bad-password', message: 'Неверный пароль комнаты' });
       }
       if (room.members.size >= room.capacity) {
@@ -109,13 +140,19 @@ export function attachRealtime(server, { authenticate, onAppUsed, log = () => {}
       broadcast(room, watchSnapshot(room));
     }
     log(`${client.user.username} joined ${key} (${room.members.size}/${room.capacity})`);
+    announcePresence(client.user.id);
   }
 
   function leave(client, key) {
     const room = rooms.get(key);
+    if (room?.kind === 'watch') {
+      const linkedKey = `voice:@${room.id}`;
+      if (client.rooms.has(linkedKey)) leave(client, linkedKey);
+    }
     client.rooms.delete(key);
     client.roomState.delete(key);
     if (!room || !room.members.delete(client.id)) return;
+    if (client.user && !client.closing) announcePresence(client.user.id);
     if (room.members.size === 0) { rooms.delete(key); return; }
     if (room.hostId === client.id) room.hostId = room.members.keys().next().value;
     if (room.kind === 'voice') broadcast(room, { type: 'voice:peer-left', peerId: client.id });
@@ -203,7 +240,12 @@ export function attachRealtime(server, { authenticate, onAppUsed, log = () => {}
         client.user = auth.user;
         client.plan = auth.plan;
         clearTimeout(authTimer);
-        return send(client, { type: 'ready', selfId: client.id, user: client.user, plan: client.plan.id });
+        if (!byUser.has(client.user.id)) byUser.set(client.user.id, new Set());
+        const first = byUser.get(client.user.id).size === 0;
+        byUser.get(client.user.id).add(client);
+        send(client, { type: 'ready', selfId: client.id, user: client.user, plan: client.plan.id });
+        if (first) announcePresence(client.user.id);
+        return;
       }
 
       switch (msg.type) {
@@ -236,6 +278,22 @@ export function attachRealtime(server, { authenticate, onAppUsed, log = () => {}
           broadcast(room, { type: 'voice:peer-state', peerId: client.id, ...st });
           return;
         }
+        case 'invite': {
+          // Позвать друга в свою комнату (Voice или Watch).
+          const app = msg.app === 'watch' ? 'watch' : 'voice';
+          const room = roomOf(client, app);
+          const to = Number(msg.to);
+          if (!room) return send(client, { type: 'error', code: 'not-in-room', message: 'Сначала зайдите в комнату' });
+          if (!areFriends(client.user.id, to)) return send(client, { type: 'error', code: 'not-friends', message: 'Звать можно только друзей' });
+          if (!isOnline(to)) return send(client, { type: 'error', code: 'offline', message: 'Друг сейчас не в сети' });
+          const now = Date.now();
+          client.chatTimes = client.chatTimes.filter((t) => now - t < 5000);
+          if (client.chatTimes.length >= 8) return send(client, { type: 'error', code: 'slow-down', message: 'Слишком часто. Подождите пару секунд.' });
+          client.chatTimes.push(now);
+          room.invited.add(to);
+          notifyUser(to, { type: 'invite', from: { id: client.user.id, username: client.user.username }, app, room: room.id, private: Boolean(room.password) });
+          return send(client, { type: 'invite:sent', to, app, room: room.id });
+        }
         case 'voice:speaking': {
           const room = roomOf(client, 'voice');
           if (room) broadcast(room, { type: 'voice:speaking', peerId: client.id, speaking: Boolean(msg.speaking) }, client.id);
@@ -247,7 +305,14 @@ export function attachRealtime(server, { authenticate, onAppUsed, log = () => {}
 
     ws.on('close', () => {
       clearTimeout(authTimer);
+      client.closing = true;
       for (const key of [...client.rooms]) leave(client, key);
+      if (client.user) {
+        const set = byUser.get(client.user.id);
+        set?.delete(client);
+        if (set && set.size === 0) byUser.delete(client.user.id);
+        announcePresence(client.user.id);
+      }
     });
   });
 
@@ -264,9 +329,17 @@ export function attachRealtime(server, { authenticate, onAppUsed, log = () => {}
 
   return {
     wss,
+    isOnline,
+    activityOf,
+    notifyUser,
+    announcePresence,
+    /** Разорвать все соединения пользователя (смена пароля, удаление аккаунта). */
+    disconnectUser(userId, reason = 'session-ended') {
+      for (const c of [...(byUser.get(userId) ?? [])]) c.ws.close(4001, reason);
+    },
     listRooms(kind) {
       return [...rooms.values()]
-        .filter((r) => r.kind === kind && !r.password)
+        .filter((r) => r.kind === kind && !r.password && !r.linked)
         .map((r) => ({
           id: r.id, members: r.members.size, capacity: r.capacity,
           nowPlaying: r.state?.media ? r.state.media.url : undefined,

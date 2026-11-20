@@ -126,3 +126,40 @@ test('Free-комната просмотра — до 4 человек', async (
   assert.equal((await cs[4].next('error')).code, 'room-full');
   await Promise.all(cs.map((c) => c.close()));
 });
+
+test('голосовой чат комнаты просмотра: только для участников, не виден в списке Voice', async () => {
+  const a = await register(ctx.base, 'wv_alpha');
+  const b = await register(ctx.base, 'wv_beta');
+  const ca = await wsClient(ctx.base, a.token);
+  const cb = await wsClient(ctx.base, b.token);
+
+  ca.send({ type: 'voice:join', room: 'party', watch: true });
+  assert.equal((await ca.next('error')).code, 'not-in-room');
+
+  ca.send({ type: 'watch:join', room: 'party' });
+  await ca.next('watch:joined');
+  ca.send({ type: 'voice:join', room: 'party', watch: true });
+  const j = await ca.next('voice:joined');
+  assert.equal(j.room, '@party');
+  assert.equal(j.capacity, 4, 'вместимость как у комнаты просмотра');
+
+  // Обычный вход в «@party» запрещён валидацией имени
+  cb.send({ type: 'voice:join', room: '@party' });
+  assert.equal((await cb.next('error')).code, 'bad-room');
+
+  cb.send({ type: 'watch:join', room: 'party' });
+  await cb.next('watch:joined');
+  cb.send({ type: 'voice:join', room: 'party', watch: true });
+  const jb = await cb.next('voice:joined');
+  assert.equal(jb.peers[0].username, 'wv_alpha');
+
+  await ca.next('voice:peer-joined');
+  const voiceRooms = (await http(ctx.base, '/api/rooms/voice', { token: a.token })).body.rooms;
+  assert.ok(!voiceRooms.some((r) => r.id.startsWith('@')));
+
+  // Выход из комнаты просмотра выводит и из её голосового чата
+  cb.send({ type: 'watch:leave' });
+  const left = await ca.next('voice:peer-left');
+  assert.equal(left.peerId, cb.ready.selfId);
+  await ca.close(); await cb.close();
+});

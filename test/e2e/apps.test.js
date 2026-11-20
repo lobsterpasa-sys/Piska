@@ -174,3 +174,108 @@ test('мобильная вёрстка: нет горизонтальной п�
   }
   await context.close();
 });
+
+test('Друзья и приглашения: добавить друга, увидеть его в Voice, позвать в комнату', async () => {
+  const a = await newUser('e2e_fr_host');
+  const b = await newUser('e2e_fr_guest');
+
+  // A отправляет заявку с главной страницы
+  await a.page.click('[data-testid="open-friends"]');
+  await a.page.fill('[data-testid="friends-panel"] input[name="username"]', 'e2e_fr_guest');
+  await a.page.click('[data-testid="friends-panel"] form button');
+  await a.page.waitForSelector('[data-testid="friends-panel"] >> text=ждёт ответа');
+
+  // B получает уведомление в реальном времени, принимает в приложении Watch
+  await b.page.goto(`${ctx.base}/watch`);
+  await b.page.waitForSelector('[data-testid="friends-btn"]');
+  await b.page.waitForFunction(() => document.querySelector('[data-testid="friends-btn"]').textContent.includes('🔔1'), null, { timeout: 5000 });
+  await b.page.click('[data-testid="friends-btn"]');
+  await b.page.click('[data-testid="friends-panel"] [data-accept]');
+  await b.page.waitForSelector('[data-friend="e2e_fr_host"]');
+
+  // A заходит в голосовую комнату — B видит, где он
+  await a.page.goto(`${ctx.base}/voice`);
+  await a.page.fill('#room', 'e2e-friends');
+  await a.page.click('[data-testid="join-voice"]');
+  await a.page.waitForSelector('#room-view:not(.hidden)');
+  await b.page.waitForSelector('[data-friend="e2e_fr_host"] >> text=Voice: e2e-friends', { timeout: 5000 });
+
+  // A зовёт B; B нажимает «Зайти» и оказывается в той же комнате с голосом
+  await a.page.click('[data-testid="call-friends"]');
+  await a.page.click('[data-friend="e2e_fr_guest"] [data-invite]');
+  await b.page.waitForSelector('.toast >> text=зовёт вас');
+  await shot(b.page, '6-invite');
+  await b.page.click('.toast button');
+  await b.page.waitForURL(/\/voice/);
+  await b.page.waitForSelector('#room-view:not(.hidden)');
+  await a.page.waitForSelector('.peer[data-conn="connected"]', { timeout: 15000 });
+  assert.match(await b.page.textContent('#room-title'), /e2e-friends/);
+  await shot(a.page, '7-friends-voice');
+  assert.deepEqual([...a.errors, ...b.errors], []);
+  await a.context.close();
+  await b.context.close();
+});
+
+test('Voice: режим рации — микрофон работает только пока зажата кнопка', async () => {
+  const a = await newUser('e2e_ptt_a');
+  const b = await newUser('e2e_ptt_b');
+  for (const u of [a, b]) {
+    await u.page.goto(`${ctx.base}/voice#room=e2e-ptt&join=1`);
+    await u.page.waitForSelector('#room-view:not(.hidden)');
+  }
+  await a.page.waitForSelector('.peer[data-conn="connected"]', { timeout: 15000 });
+  await a.page.check('[data-testid="ptt"]');
+  await b.page.waitForSelector('text=выкл. микрофон');
+  const trackEnabled = () => a.page.evaluate(() => [...window.__voicePeers.values()][0].pc.getSenders()[0].track.enabled);
+  assert.equal(await trackEnabled(), false);
+  const btn = a.page.locator('[data-testid="ptt-hold"]');
+  await btn.hover();
+  await a.page.mouse.down();
+  assert.equal(await trackEnabled(), true);
+  await a.page.mouse.up();
+  assert.equal(await trackEnabled(), false);
+  await a.context.close();
+  await b.context.close();
+});
+
+test('Watch: голосовой чат прямо в комнате просмотра', async () => {
+  const a = await newUser('e2e_wv_a');
+  const b = await newUser('e2e_wv_b');
+  for (const u of [a, b]) {
+    await u.page.goto(`${ctx.base}/watch#room=e2e-party&join=1`);
+    await u.page.waitForSelector('#room-view:not(.hidden)');
+    await u.page.click('[data-testid="voice-toggle"]');
+  }
+  await a.page.waitForFunction(async () => {
+    for (const { pc } of window.__voicePeers.values()) {
+      if (pc.connectionState !== 'connected') continue;
+      const stats = await pc.getStats();
+      for (const r of stats.values()) if (r.type === 'inbound-rtp' && r.kind === 'audio' && r.bytesReceived > 1000) return true;
+    }
+    return false;
+  }, null, { timeout: 15000, polling: 500 });
+  await a.page.waitForFunction(() => document.querySelectorAll('[data-member]').length === 2 && document.querySelector('[data-testid="members"]').textContent.split('🎙').length === 3);
+  await shot(a.page, '8-watch-voice');
+  await b.page.click('[data-testid="voice-toggle"]');
+  await a.page.waitForFunction(() => document.querySelector('[data-testid="members"]').textContent.split('🎙').length === 2);
+  assert.deepEqual([...a.errors, ...b.errors], []);
+  await a.context.close();
+  await b.context.close();
+});
+
+test('Настройки: смена пароля и удаление аккаунта', async () => {
+  const u = await newUser('e2e_settings');
+  await u.page.fill('#pw-cur', 'password123');
+  await u.page.fill('#pw-new', 'brandnewpass1');
+  await u.page.click('#pw-form button');
+  await u.page.waitForSelector('.toast >> text=Пароль изменён');
+  await u.page.reload();
+  await u.page.waitForSelector('#apps'); // новый токен сохранён — остаёмся в аккаунте
+  u.page.on('dialog', (d) => d.accept());
+  await u.page.fill('#del-pw', 'brandnewpass1');
+  await u.page.click('#del-form button');
+  await u.page.waitForSelector('#auth');
+  const r = await fetch(`${ctx.base}/api/auth/login`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ login: 'e2e_settings', password: 'brandnewpass1' }) });
+  assert.equal(r.status, 401);
+  await u.context.close();
+});
