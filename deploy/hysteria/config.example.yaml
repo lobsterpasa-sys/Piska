@@ -1,0 +1,46 @@
+# Сервер Hysteria 2 на узле Hub Boost.
+# Скопируйте в /etc/hysteria/config.yaml и замените hub.example.com на адрес вашего сервера Hub.
+listen: :443
+
+# Вариант 1 — свой домен и бесплатный сертификат Let's Encrypt (рекомендуется):
+# acme:
+#   domains: [fra.hub.example.com]
+#   email: admin@example.com
+#
+# Вариант 2 — самоподписанный сертификат (make-cert.sh) + отпечаток pinSHA256 в настройках узла:
+tls:
+  cert: /etc/hysteria/cert.pem
+  key: /etc/hysteria/key.pem
+
+# Кого пускать, решает сервер Hub: ключи выдаются в приложении, отзываются при смене пароля.
+auth:
+  type: http
+  http:
+    url: https://hub.example.com/api/boost/hy2/auth
+
+# Для посторонних узел выглядит как обычный сайт.
+masquerade:
+  type: proxy
+  proxy:
+    url: https://www.wikipedia.org/
+    rewriteHost: true
+
+# Дополнительная маскировка трафика (необязательно). Пароль тот же, что obfsPassword в BOOST_NODES.
+# obfs:
+#   type: salamander
+#   salamander:
+#     password: замените-на-длинный-случайный-пароль
+
+# Узел — для игр: во внутренние сети и на почтовые порты не пускаем.
+acl:
+  inline:
+    - reject(10.0.0.0/8)
+    - reject(172.16.0.0/12)
+    - reject(192.168.0.0/16)
+    - reject(127.0.0.0/8)
+    - reject(169.254.0.0/16)
+    - reject(100.64.0.0/10)
+    - reject(fc00::/7)
+    - reject(::1/128)
+    - reject(all, tcp/25)
+    - direct(all)

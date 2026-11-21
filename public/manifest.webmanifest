@@ -1,0 +1,24 @@
+{
+  "id": "/",
+  "name": "Hub — Voice, Watch, Boost",
+  "short_name": "Hub",
+  "description": "Голосовой чат для игроков, совместный просмотр и ускоритель игр с одним аккаунтом",
+  "start_url": "/?source=pwa",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#0b0d14",
+  "theme_color": "#0b0d14",
+  "lang": "ru",
+  "categories": ["social", "entertainment", "games"],
+  "icons": [
+    { "src": "/icons/hub-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/hub-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/hub-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    { "name": "Voice", "short_name": "Voice", "url": "/voice", "icons": [{ "src": "/icons/hub-192.png", "sizes": "192x192" }] },
+    { "name": "Watch", "short_name": "Watch", "url": "/watch", "icons": [{ "src": "/icons/hub-192.png", "sizes": "192x192" }] },
+    { "name": "Boost", "short_name": "Boost", "url": "/boost", "icons": [{ "src": "/icons/hub-192.png", "sizes": "192x192" }] }
+  ]
+}

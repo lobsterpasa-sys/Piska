@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0b0d14">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="icon" href="/icons/favicon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="/icons/hub-180.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Hub">
+  <title>Hub аккаунт</title>
+  <link rel="stylesheet" href="/shared/style.css">
+</head>
+<body data-app="voice">
+  <main class="container" id="root"></main>
+  <script type="module">
+    import { api, getToken, setToken, authForm, renderTopbar, mountFriends, logout, pageUrl, APP_META, esc, toast, installMode, promptInstall, SHARE_ICON } from '/shared/hub.js';
+
+    /** Карточка «Установить Hub»: кнопка на Android/ПК, инструкция на iPhone. */
+    function installCard() {
+      const box = document.getElementById('install');
+      if (!box) return;
+      const mode = installMode();
+      box.classList.toggle('hidden', !mode);
+      if (mode === 'prompt') {
+        box.innerHTML = `<div class="row wrap"><img src="/icons/hub-192.png" alt="" width="48" height="48" style="border-radius:12px">
+          <div class="grow"><b>Установите Hub как приложение</b><div class="muted small">Иконка на экране, открывается без браузера</div></div>
+          <button class="btn" data-testid="install-btn">📲 Установить</button></div>`;
+        box.querySelector('button').addEventListener('click', async () => { if (await promptInstall()) toast('Hub установлен'); installCard(); });
+      } else if (mode === 'ios') {
+        box.innerHTML = `<div class="row wrap" style="align-items:flex-start"><img src="/icons/hub-180.png" alt="" width="48" height="48" style="border-radius:12px">
+          <div class="grow"><b>Установите Hub на iPhone</b>
+          <ol class="small" style="margin:6px 0 0;padding-left:18px">
+            <li>Нажмите ${SHARE_ICON} «Поделиться» внизу Safari</li>
+            <li>Выберите «На экран „Домой“»</li>
+            <li>Откройте Hub с экрана — один вход для Voice, Watch и Boost</li>
+          </ol></div></div>`;
+      }
+    }
+    document.addEventListener('hub:installable', installCard);
+
+    const root = document.getElementById('root');
+    const fmtDate = (ms) => new Date(ms).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' });
+
+    function appCards(linked = []) {
+      return Object.entries(APP_META).map(([k, m]) => {
+        const on = linked.some((a) => a.app === k);
+        return `<a class="card app-card" href="${pageUrl(k)}" data-testid="app-${k}" style="--accent:${k === 'voice' ? '#7c5cff' : k === 'watch' ? '#ff4f8b' : '#19d38a'}">
+          <div class="app-icon">${m.icon}</div>
+          <h3>${m.title}</h3>
+          <div class="muted small">${m.desc}</div>
+          <div class="small">${on ? '<span class="check">✓ Подключено к аккаунту</span>' : '<span class="muted">Откройте — вход выполнится автоматически</span>'}</div>
+        </a>`;
+      }).join('');
+    }
+
+    async function renderLanding() {
+      renderTopbar(null, null);
+      root.innerHTML = `
+        <section class="grid cols-2" style="align-items:start">
+          <div>
+            <h1>Один аккаунт — три приложения</h1>
+            <p class="muted">Зарегистрируйтесь один раз и пользуйтесь голосовым чатом, совместным просмотром и ускорителем игр без повторной регистрации. Одна подписка Premium работает везде.</p>
+            <div class="card hidden" id="install" style="margin-top:16px"></div>
+            <div class="grid" style="margin-top:16px">${appCards()}</div>
+          </div>
+          <div class="card" id="auth"></div>
+        </section>`;
+      installCard();
+      await authForm(document.getElementById('auth'));
+      location.reload();
+    }
+
+    function planCards(account, plans) {
+      const isPremium = account.plan.id === 'premium';
+      const p = plans.find((x) => x.id === 'premium');
+      const f = plans.find((x) => x.id === 'free');
+      return `
+        <div class="card plan-card">
+          <h3>Free</h3><div class="price">Бесплатно</div>
+          <ul class="features">
+            <li>Голосовые комнаты до ${f.limits.voiceRoomSize} человек</li>
+            <li>Совместный просмотр до ${f.limits.watchRoomSize} человек</li>
+            <li>Эффекты голоса: эхо</li>
+            <li>Стандартные узлы ускорителя</li>
+          </ul>
+        </div>
+        <div class="card plan-card featured">
+          <h3>⭐ ${p.name}</h3><div class="price">$${p.priceMonthly}<span class="muted small"> / мес</span></div>
+          <ul class="features">
+            <li>Комнаты до ${p.limits.voiceRoomSize} человек в Voice и Watch</li>
+            <li>Все эффекты голоса (робот, рация, бас, бурундук)</li>
+            <li>Звук ${p.limits.voiceBitrateKbps} кбит/с вместо ${f.limits.voiceBitrateKbps}</li>
+            <li>Приватные комнаты с паролем</li>
+            <li>Премиум-узлы и мультипуть в Boost</li>
+          </ul>
+          ${isPremium
+            ? `<p class="small">Активна до <b>${fmtDate(account.subscription.expiresAt)}</b>${account.subscription.autoRenew ? '' : ' (автопродление отключено)'}</p>
+               <div class="row wrap">
+                 <button class="btn gold sm" data-buy="1">Продлить на месяц</button>
+                 ${account.subscription.autoRenew ? '<button class="btn ghost sm" data-cancel>Отменить автопродление</button>' : ''}
+               </div>`
+            : `<div class="row wrap">
+                 <button class="btn gold" data-buy="1" data-testid="buy-premium">1 месяц</button>
+                 <button class="btn ghost" data-buy="3">3 мес −15%</button>
+                 <button class="btn ghost" data-buy="12">Год −40%</button>
+               </div>`}
+        </div>`;
+    }
+
+    async function renderAccount(account) {
+      const { plans, paymentsMode } = await api('/api/plans');
+      const friends = mountFriends(renderTopbar(null, account));
+      root.innerHTML = `
+        <h1>Привет, ${esc(account.user.username)} 👋</h1>
+        <p class="muted">Аккаунт Hub · ${esc(account.user.email)} · с ${fmtDate(account.user.createdAt)}</p>
+        <div class="card hidden" id="install" style="margin-top:16px"></div>
+        <h2 style="margin-top:24px">Ваши приложения</h2>
+        <div class="grid cols-3" id="apps">${appCards(account.apps)}</div>
+        <h2 style="margin-top:32px">Подписка</h2>
+        ${paymentsMode === 'test' ? '<p class="small" style="color:var(--warn)">Тестовый режим оплаты: подписка активируется без списания денег.</p>' : ''}
+        <div class="grid cols-2" id="plans">${planCards(account, plans)}</div>
+        <h2 style="margin-top:32px">Друзья</h2>
+        <div class="card row wrap">
+          <p class="muted grow" style="margin:0">Друзья общие для всех приложений: видно, кто в сети и где сейчас, можно звать в комнаты Voice и Watch.</p>
+          <button class="btn" id="open-friends" data-testid="open-friends">👥 Открыть друзей</button>
+        </div>
+        <h2 style="margin-top:32px">Настройки</h2>
+        <div class="grid cols-2">
+          <form class="card" id="pw-form">
+            <h3>Сменить пароль</h3>
+            <label for="pw-cur">Текущий пароль</label>
+            <input id="pw-cur" name="current" type="password" autocomplete="current-password" required>
+            <label for="pw-new">Новый пароль (от 8 символов)</label>
+            <input id="pw-new" name="next" type="password" autocomplete="new-password" required minlength="8">
+            <p class="muted small">На остальных устройствах будет выполнен выход.</p>
+            <button class="btn">Сохранить</button>
+          </form>
+          <form class="card" id="del-form">
+            <h3>Удалить аккаунт</h3>
+            <p class="muted small">Аккаунт удалится во всех трёх приложениях вместе с друзьями и подпиской. Это нельзя отменить.</p>
+            <label for="del-pw">Пароль для подтверждения</label>
+            <input id="del-pw" name="password" type="password" autocomplete="current-password" required>
+            <button class="btn danger" style="margin-top:12px">Удалить навсегда</button>
+          </form>
+        </div>
+        <div style="margin-top:32px"><button class="btn ghost" id="logout">Выйти из аккаунта</button></div>`;
+      document.getElementById('open-friends').addEventListener('click', () => friends.open());
+      installCard();
+      document.getElementById('pw-form').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        try {
+          const r = await api('/api/account/password', { method: 'POST', body: Object.fromEntries(new FormData(e.target)) });
+          setToken(r.token);
+          e.target.reset();
+          toast('Пароль изменён');
+        } catch (err) { toast(err.message, 'bad'); }
+      });
+      document.getElementById('del-form').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        if (!confirm('Точно удалить аккаунт навсегда?')) return;
+        try {
+          await api('/api/account', { method: 'DELETE', body: Object.fromEntries(new FormData(e.target)) });
+          logout();
+        } catch (err) { toast(err.message, 'bad'); }
+      });
+
+      root.querySelectorAll('[data-buy]').forEach((b) => b.addEventListener('click', async () => {
+        try {
+          const acc = await api('/api/subscription/checkout', { method: 'POST', body: { plan: 'premium', months: Number(b.dataset.buy) } });
+          toast('Premium активирован во всех приложениях ⭐');
+          document.querySelector('.topbar').remove();
+          renderAccount(acc);
+        } catch (e) { toast(e.message, 'bad'); }
+      }));
+      root.querySelector('[data-cancel]')?.addEventListener('click', async () => {
+        const acc = await api('/api/subscription/cancel', { method: 'POST' });
+        toast('Автопродление отключено');
+        document.querySelector('.topbar').remove();
+        renderAccount(acc);
+      });
+      document.getElementById('logout').addEventListener('click', logout);
+    }
+
+    if (!getToken()) renderLanding();
+    else api('/api/me').then(renderAccount).catch(() => { localStorage.removeItem('hub.token'); renderLanding(); });
+  </script>
+</body>
+</html>
