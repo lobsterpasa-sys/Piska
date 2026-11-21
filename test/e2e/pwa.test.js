@@ -113,3 +113,22 @@ test('без интернета: интерфейс открывается из 
   await context.setOffline(false);
   await context.close();
 });
+
+test('iPhone: ключ Hysteria 2 и QR-код в Boost', async () => {
+  const hy = await startHub({ env: { HY2_PORT: '8443', HY2_SNI: 'node.hub.test', HY2_HOST: 'node.hub.test' } });
+  const context = await browser.newContext(IPHONE);
+  const page = await context.newPage();
+  try {
+    const u = await register(hy.base, 'iphone_hy2');
+    await page.goto(`${hy.base}/boost`);
+    await page.evaluate((t) => localStorage.setItem('hub.token', t), u.token);
+    await page.reload();
+    await page.click('[data-game="pubg-mobile"]');
+    await page.click('[data-node="local"]');
+    await page.click('[data-testid="hy2-get"]');
+    await page.waitForSelector('[data-testid="hy2-result"]:not(.hidden)');
+    assert.match(await page.inputValue('#hy2-uri'), /^hysteria2:\/\/.+@node\.hub\.test:8443\/\?sni=node\.hub\.test#/);
+    assert.equal(await page.locator('#hy2-qr svg').count(), 1);
+    if (SHOTS) await page.locator('#hy2-box').screenshot({ path: `${SHOTS}/11-iphone-hy2.png` });
+  } finally { await context.close(); await hy.stop(); }
+});

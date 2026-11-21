@@ -516,6 +516,11 @@ export function showIosInstallHint() {
     <div class="grow"><b>Установите Hub на iPhone</b>
       <div class="small">Нажмите ${SHARE_ICON} «Поделиться», затем «На экран „Домой“». Один вход — Voice, Watch и Boost.</div></div>
     <button class="btn ghost sm" aria-label="Закрыть">✕</button>`;
-  el.querySelector('button').addEventListener('click', () => { storage.set('hub.iosHintClosed', '1'); el.remove(); });
+  el.querySelector('button').addEventListener('click', () => {
+    storage.set('hub.iosHintClosed', '1');
+    el.remove();
+    document.body.classList.remove('has-hint');
+  });
   document.body.append(el);
+  document.body.classList.add('has-hint'); // место внизу, чтобы подсказка не закрывала кнопки
 }

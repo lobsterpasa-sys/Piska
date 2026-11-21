@@ -171,13 +171,14 @@ ul.features li { margin: 4px 0; }
   .tabbar a.active { color: var(--text); background: var(--card-2); }
   .tab-icon { font-size: 1.3rem; line-height: 1; }
   body.has-tabbar { padding-bottom: calc(70px + env(safe-area-inset-bottom)); }
+  body.has-tabbar.has-hint { padding-bottom: calc(190px + env(safe-area-inset-bottom)); }
   body.has-tabbar .toasts { bottom: calc(80px + env(safe-area-inset-bottom)); }
   .topbar .brand { font-size: 1.05rem; }
   .container { padding-top: 16px; }
   h1 { font-size: 1.5rem; }
 }
 
-@media (min-width: 641px) { .install-hint { bottom: 16px; max-width: 420px; left: auto; } }
+@media (min-width: 641px) { .install-hint { bottom: 16px; max-width: 420px; left: auto; } body.has-hint { padding-bottom: 120px; } }
 /* Установленное приложение: без выделения текста при долгом нажатии на кнопки и меню */
 @media (display-mode: standalone) {
   .btn, .tabbar a, .appnav a { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }

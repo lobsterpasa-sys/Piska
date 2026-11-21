@@ -250,3 +250,50 @@ test('мультиплекс: повторное приветствие сохр
   assert.equal((await c.recv()).toString(), 'OK2');
   assert.equal([...relay.sessions.values()][0].flows.size, 1);
 });
+
+// ---------- Hysteria 2: ключи и проверка доступа (без бинарника) ----------
+test('Hysteria 2: ключ, проверка узлом, Premium-узел, отзыв при удалении аккаунта', async () => {
+  const hy = await startHub({
+    nodes: [
+      { id: 'local', name: 'Local', region: 'local', host: '127.0.0.1', udpPort: 0, probeUrl: null, premium: false,
+        hy2: { port: 8443, sni: 'fra.hub.test', pinSHA256: null, insecure: false, obfsPassword: 'secret-obfs', host: 'fra.hub.test' } },
+      { id: 'vip', name: 'VIP', region: 'eu', host: 'vip.hub.test', udpPort: 40000, probeUrl: null, premium: true,
+        hy2: { port: 443, sni: 'vip.hub.test', pinSHA256: 'AB:CD', insecure: false, obfsPassword: null, host: null } },
+      { id: 'plain', name: 'Plain', region: 'eu', host: 'plain.hub.test', udpPort: 40000, probeUrl: null, premium: false, hy2: null },
+    ],
+    embeddedRelay: false,
+  });
+  try {
+    const u = await register(hy.base, 'hy_unit');
+    const nodesList = (await http(hy.base, '/api/boost/nodes', { token: u.token })).body.nodes;
+    assert.deepEqual(nodesList.map((n) => [n.id, n.hy2]), [['local', true], ['vip', true], ['plain', false]]);
+    assert.ok(!JSON.stringify(nodesList).includes('secret-obfs'), 'пароль маскировки не раскрывается в списке');
+
+    const prof = await http(hy.base, '/api/boost/hy2/profile', { method: 'POST', token: u.token, body: { nodeId: 'local' } });
+    assert.equal(prof.status, 200);
+    const m = /^hysteria2:\/\/([^@]+)@fra\.hub\.test:8443\/\?(.+)#(.+)$/.exec(prof.body.uri);
+    assert.ok(m, prof.body.uri);
+    const params = new URLSearchParams(m[2]);
+    assert.equal(params.get('sni'), 'fra.hub.test');
+    assert.equal(params.get('obfs'), 'salamander');
+    assert.equal(params.get('obfs-password'), 'secret-obfs');
+    assert.equal(params.get('insecure'), null, 'с настоящим сертификатом проверка не отключается');
+    assert.equal(decodeURIComponent(m[3]), 'Hub Boost · Local');
+
+    const auth = (key) => http(hy.base, '/api/boost/hy2/auth', { method: 'POST', body: { addr: '1.2.3.4:5555', auth: key, tx: 0 } }).then((r) => r.body);
+    assert.deepEqual(await auth(m[1]), { ok: true, id: `hy_unit#${u.user.id}` });
+    assert.deepEqual(await auth('garbage'), { ok: false, id: '' });
+    assert.deepEqual(await auth(u.token), { ok: false, id: '' }, 'токен входа в аккаунт — не ключ узла');
+
+    // Premium-узел: без Premium ключ не выдаётся
+    assert.equal((await http(hy.base, '/api/boost/hy2/profile', { method: 'POST', token: u.token, body: { nodeId: 'vip' } })).status, 403);
+    assert.equal((await http(hy.base, '/api/boost/hy2/profile', { method: 'POST', token: u.token, body: { nodeId: 'plain' } })).status, 400);
+    await makePremium(hy.base, u.token);
+    const vip = await http(hy.base, '/api/boost/hy2/profile', { method: 'POST', token: u.token, body: { nodeId: 'vip' } });
+    assert.match(vip.body.uri, /@vip\.hub\.test:443\/\?sni=vip\.hub\.test&pinSHA256=AB%3ACD&insecure=1#/);
+
+    // Удаление аккаунта отзывает ключи
+    await http(hy.base, '/api/account', { method: 'DELETE', token: u.token, body: { password: 'password123' } });
+    assert.deepEqual(await auth(m[1]), { ok: false, id: '' });
+  } finally { await hy.stop(); }
+});

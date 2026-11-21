@@ -1,4 +1,5 @@
 import express from 'express';
+import QRCode from 'qrcode';
 import http from 'node:http';
 import { randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
@@ -301,13 +302,56 @@ export function createHub(options = {}) {
 
   app.get('/api/boost/nodes', requireAuth, (req, res) => {
     res.json({
-      nodes: nodes.map((n) => ({ ...n, locked: n.premium && !req.plan.limits.boostPremiumNodes })),
+      // Настройки Hysteria наружу не отдаём — только факт, что узел её поддерживает.
+      nodes: nodes.map(({ hy2, ...n }) => ({ ...n, hy2: Boolean(hy2), locked: n.premium && !req.plan.limits.boostPremiumNodes })),
       multipath: req.plan.limits.boostMultipath,
     });
   });
 
   // Пустой ответ для замера задержки (клиент меряет время запроса).
   app.get('/api/boost/probe', (req, res) => res.set({ 'Cache-Control': 'no-store', 'Access-Control-Allow-Origin': '*' }).status(204).end());
+
+  // ---------- Hysteria 2: ускорение через приложение с поддержкой Hysteria (iPhone и др.) ----------
+  const HY2_TTL = 60 * 60 * 24 * 30; // ключ действует 30 дней, потом его просто выпускают заново
+
+  /** Узел Hysteria спрашивает нас, пускать ли подключение (auth.type: http в config.yaml узла). */
+  app.post('/api/boost/hy2/auth', (req, res) => {
+    const payload = verifyToken(String(req.body?.auth ?? ''), secret);
+    const deny = () => res.json({ ok: false, id: '' });
+    if (!payload || payload.kind !== 'hy2') return deny();
+    const user = q.userById.get(payload.sub);
+    // Смена пароля и удаление аккаунта отзывают ключи сразу.
+    if (!user || (payload.v ?? 0) !== user.token_version) return deny();
+    const node = nodes.find((n) => n.id === payload.node);
+    if (!node?.hy2) return deny();
+    if (node.premium && !planFor(q.sub.get(user.id)).limits.boostPremiumNodes) return deny();
+    res.json({ ok: true, id: `${user.username}#${user.id}` });
+  });
+
+  /** Личная ссылка hysteria2:// и QR-код для приложения на телефоне. */
+  app.post('/api/boost/hy2/profile', requireAuth, async (req, res) => {
+    const node = nodes.find((n) => n.id === req.body?.nodeId);
+    if (!node) return res.status(400).json({ error: 'Выберите узел' });
+    if (!node.hy2) return res.status(400).json({ error: 'На этом узле нет Hysteria 2' });
+    if (node.premium && !req.plan.limits.boostPremiumNodes) return res.status(403).json({ error: 'Этот узел доступен в Premium' });
+    const user = q.userById.get(req.user.id);
+    const auth = signToken({ sub: user.id, kind: 'hy2', node: node.id, v: user.token_version }, secret, HY2_TTL);
+    const h = node.hy2;
+    const host = h.host ?? (node.id === 'local' && embeddedRelay ? (env.RELAY_PUBLIC_HOST ?? req.hostname) : node.host);
+    const params = new URLSearchParams();
+    if (h.sni) params.set('sni', h.sni);
+    if (h.pinSHA256) params.set('pinSHA256', h.pinSHA256);
+    // Самоподписанный сертификат: проверку цепочки отключаем, но клиент сверяет отпечаток pinSHA256.
+    // Для публикации лучше настоящий сертификат (acme в config.yaml узла) — тогда insecure не нужен.
+    if (h.insecure || h.pinSHA256) params.set('insecure', '1');
+    if (h.obfsPassword) { params.set('obfs', 'salamander'); params.set('obfs-password', h.obfsPassword); }
+    const name = `Hub Boost · ${node.name}`;
+    const hostPart = host.includes(':') ? `[${host}]` : host;
+    const uri = `hysteria2://${auth}@${hostPart}:${h.port}/?${params}#${encodeURIComponent(name)}`;
+    const qrSvg = await QRCode.toString(uri, { type: 'svg', errorCorrectionLevel: 'M', margin: 2, color: { dark: '#000000', light: '#ffffff' } });
+    linkApp(user.id, 'boost');
+    res.json({ uri, name, qrSvg, expiresAt: Date.now() + HY2_TTL * 1000 });
+  });
 
   app.post('/api/boost/session', requireAuth, (req, res) => {
     const game = GAMES.find((g) => g.id === req.body?.gameId);

@@ -35,6 +35,7 @@ export function loadNodes(env = process.env) {
       udpPort: Number(n.udpPort),
       probeUrl: n.probeUrl ? String(n.probeUrl) : null,
       premium: Boolean(n.premium),
+      hy2: parseHy2(n.hy2),
     }));
   }
   return [
@@ -46,6 +47,27 @@ export function loadNodes(env = process.env) {
       udpPort: Number(env.RELAY_PORT ?? 40000),
       probeUrl: null, // null = замер пинга через основной сервер
       premium: false,
+      // Для разработки: HY2_PORT=… HY2_SNI=… (HY2_PIN=…) — локальный сервер Hysteria 2.
+      hy2: env.HY2_PORT ? parseHy2({ port: env.HY2_PORT, sni: env.HY2_SNI, pinSHA256: env.HY2_PIN, insecure: env.HY2_INSECURE === '1', obfsPassword: env.HY2_OBFS, host: env.HY2_HOST }) : null,
     },
   ];
+}
+
+/**
+ * Настройки Hysteria 2 на узле (необязательно):
+ *   { port: 443, sni: "fra.hub.example.com", pinSHA256: "AA:BB:…" | null, insecure: false, obfsPassword: null, host: null }
+ * host — если Hysteria доступна по другому адресу, чем узел (например, по домену).
+ */
+function parseHy2(h) {
+  if (!h) return null;
+  const port = Number(h.port);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('hy2.port: номер порта');
+  return {
+    port,
+    sni: h.sni ? String(h.sni) : null,
+    pinSHA256: h.pinSHA256 ? String(h.pinSHA256) : null,
+    insecure: Boolean(h.insecure),
+    obfsPassword: h.obfsPassword ? String(h.obfsPassword) : null,
+    host: h.host ? String(h.host) : null,
+  };
 }

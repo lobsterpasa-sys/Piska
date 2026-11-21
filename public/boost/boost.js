@@ -113,6 +113,9 @@ function renderNodes() {
 function renderSummary() {
   const g = games.find((x) => x.id === selectedGame);
   const n = nodes.find((x) => x.id === selectedNode);
+  // Вне Android-приложения (iPhone, ПК) предлагаем ключ Hysteria 2, если узел его поддерживает.
+  $('hy2-box').classList.toggle('hidden', Boolean(native) || !n?.hy2 || n.locked);
+  $('hy2-result').classList.add('hidden');
   $('summary').textContent = g && n ? `${g.name} → ${n.name}` : 'Выберите игру и узел';
   $('boost').disabled = !(g && n);
 }
@@ -223,6 +226,18 @@ function stopBoost() {
   $('boost').classList.remove('on');
   $('session-info').textContent = 'Ускорение остановлено.';
 }
+
+$('hy2-get').addEventListener('click', async () => {
+  try {
+    const p = await api('/api/boost/hy2/profile', { method: 'POST', body: { nodeId: selectedNode } });
+    $('hy2-qr').innerHTML = p.qrSvg; // SVG сгенерирован нашим сервером
+    $('hy2-uri').value = p.uri;
+    $('hy2-result').classList.remove('hidden');
+  } catch (e) { toast(e.message, 'bad'); }
+});
+$('hy2-copy').addEventListener('click', async () => {
+  try { await navigator.clipboard.writeText($('hy2-uri').value); toast('Ключ скопирован'); } catch { $('hy2-uri').select(); }
+});
 
 $('boost').addEventListener('click', async () => {
   try { if (monitor) stopBoost(); else await startBoost(); } catch (e) { toast(e.message, 'bad'); }
