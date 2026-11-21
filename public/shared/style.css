@@ -23,6 +23,8 @@ body[data-app="boost"] { --accent: #19d38a; --accent-2: #6cf0b9; }
 * { box-sizing: border-box; }
 html, body { margin: 0; }
 body {
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
   background: radial-gradient(1200px 600px at 80% -10%, color-mix(in srgb, var(--accent) 18%, transparent), transparent 60%), var(--bg);
   color: var(--text);
   font: 15px/1.5 var(--font);
@@ -41,6 +43,7 @@ h3 { font-size: 1.05rem; }
   position: sticky; top: 0; z-index: 10;
   display: flex; align-items: center; gap: 12px;
   padding: 10px 16px;
+  padding-top: calc(10px + env(safe-area-inset-top));
   background: color-mix(in srgb, var(--bg) 85%, transparent);
   backdrop-filter: blur(10px);
   border-bottom: 1px solid var(--line);
@@ -141,7 +144,41 @@ ul.features li { margin: 4px 0; }
 .presence.on { background: var(--ok); box-shadow: 0 0 8px var(--ok); }
 .toast { display: flex; align-items: center; justify-content: space-between; }
 
+.tabbar { display: none; }
+.install-hint {
+  position: fixed; left: 12px; right: 12px; bottom: calc(76px + env(safe-area-inset-bottom)); z-index: 30;
+  display: flex; gap: 12px; align-items: center; padding: 12px;
+  background: var(--card-2); border: 1px solid var(--line); border-radius: 16px; box-shadow: 0 10px 30px rgba(0,0,0,.5);
+  animation: pop .25s ease-out;
+}
+.install-hint img { border-radius: 10px; flex: none; }
+.share-ico { display: inline-block; vertical-align: -3px; color: #4ea1ff; }
+
 @media (max-width: 640px) {
   .appnav { display: none; }
+  .tabbar {
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 20;
+    display: grid; grid-template-columns: repeat(4, 1fr);
+    padding: 6px 4px calc(6px + env(safe-area-inset-bottom));
+    background: color-mix(in srgb, var(--bg) 92%, transparent); backdrop-filter: blur(12px);
+    border-top: 1px solid var(--line);
+  }
+  .tabbar a {
+    display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 4px 0;
+    color: var(--muted); text-decoration: none; font-size: .72rem; border-radius: 10px;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .tabbar a.active { color: var(--text); background: var(--card-2); }
+  .tab-icon { font-size: 1.3rem; line-height: 1; }
+  body.has-tabbar { padding-bottom: calc(70px + env(safe-area-inset-bottom)); }
+  body.has-tabbar .toasts { bottom: calc(80px + env(safe-area-inset-bottom)); }
+  .topbar .brand { font-size: 1.05rem; }
+  .container { padding-top: 16px; }
   h1 { font-size: 1.5rem; }
+}
+
+@media (min-width: 641px) { .install-hint { bottom: 16px; max-width: 420px; left: auto; } }
+/* Установленное приложение: без выделения текста при долгом нажатии на кнопки и меню */
+@media (display-mode: standalone) {
+  .btn, .tabbar a, .appnav a { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
 }

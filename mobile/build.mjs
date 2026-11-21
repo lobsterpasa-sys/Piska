@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 /**
- * Сборка мобильных приложений Hub Voice / Hub Watch / Hub Boost (Capacitor, Android).
+ * Сборка мобильного приложения Hub (Voice + Watch + Boost в одном) для Android, на Capacitor.
  *
- *   node mobile/build.mjs [voice|watch|boost|all] [--api=https://hub.example.com] [--apk]
+ *   node mobile/build.mjs [--api=https://hub.example.com] [--apk] [--secure]
  *
- * Без --apk — только готовит Android-проекты (их можно открыть в Android Studio).
- * С --apk — ещё и собирает отладочные APK в mobile/dist/ (нужен Android SDK: ANDROID_HOME).
+ * Без --apk — только готовит Android-проект mobile/hub/android (его можно открыть в Android Studio).
+ * С --apk — ещё и собирает отладочный APK в mobile/dist/ (нужен Android SDK: ANDROID_HOME).
  * --api — адрес сервера Hub. По умолчанию http://10.0.2.2:3000 (это ваш компьютер из эмулятора Android).
  *         В приложении адрес можно поменять на экране входа (⚙ Сервер).
  * --secure — сборка для публикации: только https, без http-трафика.
@@ -18,8 +18,8 @@ import { execFileSync } from 'node:child_process';
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const { GAMES } = await import(pathToFileURL(join(ROOT, 'server/src/boost/catalog.js')).href);
 const MOBILE = join(ROOT, 'mobile');
-const APPS = JSON.parse(readFileSync(join(MOBILE, 'apps.json'), 'utf8'));
-
+const APP = JSON.parse(readFileSync(join(MOBILE, 'app.json'), 'utf8'));
+const DIR = join(MOBILE, 'hub');
 
 const run = (cmd, argv, cwd) => execFileSync(cmd, argv, { cwd, stdio: 'inherit', env: process.env });
 
@@ -31,79 +31,67 @@ function htmlFiles(dir) {
 }
 
 /** Веб-часть приложения: те же страницы, что на сайте, + config.js с настройками. */
-export function buildWww(app, dir, apiBase) {
+export function buildWww(dir, apiBase) {
   const www = join(dir, 'www');
   rmSync(www, { recursive: true, force: true });
   cpSync(join(ROOT, 'public'), www, { recursive: true });
-  // В приложение кладём только своё приложение и страницу аккаунта.
-  for (const other of Object.keys(APPS)) if (other !== app) rmSync(join(www, other), { recursive: true, force: true });
-  rmSync(join(www, 'manifest.webmanifest'), { force: true });
+  // Внутри приложения не нужны: установка на экран и service worker.
+  for (const f of ['manifest.webmanifest', 'sw.js', 'offline.html']) rmSync(join(www, f), { force: true });
 
-  const config = { native: true, app, apiBase, scheme: APPS[app].scheme };
-  writeFileSync(join(www, 'config.js'), `window.HUB_CONFIG = ${JSON.stringify(config)};\n`);
+  writeFileSync(join(www, 'config.js'), `window.HUB_CONFIG = ${JSON.stringify({ native: true, apiBase })};\n`);
 
-  // Страница аккаунта — account.html, а стартовая страница сразу открывает приложение.
-  const account = readFileSync(join(www, 'index.html'), 'utf8');
-  writeFileSync(join(www, 'account.html'), account);
+  // Главная страница Hub — account.html; index.html просто открывает её.
+  writeFileSync(join(www, 'account.html'), readFileSync(join(www, 'index.html'), 'utf8'));
   writeFileSync(join(www, 'index.html'), `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>${APPS[app].name}</title><style>body{background:#0b0d14}</style>
-<script>location.replace('/${app}/index.html' + location.hash);</script>\n`);
+<title>${APP.name}</title><style>body{background:#0b0d14}</style>
+<script>location.replace('/account.html' + location.hash);</script>\n`);
 
-  // config.js подключается раньше остальных скриптов на каждой странице.
   for (const file of htmlFiles(www)) {
-    const html = readFileSync(file, 'utf8');
+    let html = readFileSync(file, 'utf8');
     if (html.includes('/config.js')) continue;
-    writeFileSync(file, html.replace(/<head>/i, '<head>\n  <script src="/config.js"></script>'));
+    // config.js подключается раньше остальных скриптов; ссылка на манифест не нужна.
+    html = html.replace(/<head>/i, '<head>\n  <script src="/config.js"></script>').replace(/\s*<link rel="manifest"[^>]*>/, '');
+    writeFileSync(file, html);
   }
 }
 
-/** Права и глубокие ссылки в AndroidManifest.xml. */
-/** Нативный код (mobile/native/<app>) копируется в Android-проект при каждой сборке. */
-function copyNative(app, dir) {
-  const src = join(MOBILE, 'native', app);
-  if (!existsSync(src)) return;
-  const pkgPath = APPS[app].appId.replace(/\./g, '/');
-  if (existsSync(join(src, 'java'))) cpSync(join(src, 'java'), join(dir, 'android/app/src/main/java'), { recursive: true });
-  if (existsSync(join(src, 'test'))) {
-    rmSync(join(dir, 'android/app/src/test/java', pkgPath, 'ExampleUnitTest.java'), { force: true });
-    cpSync(join(src, 'test'), join(dir, 'android/app/src/test/java'), { recursive: true });
-  }
+/** Нативный код (mobile/native) копируется в Android-проект при каждой сборке. */
+function copyNative(dir) {
+  const src = join(MOBILE, 'native');
+  cpSync(join(src, 'java'), join(dir, 'android/app/src/main/java'), { recursive: true });
+  const testDir = join(dir, 'android/app/src/test/java');
+  rmSync(join(testDir, 'com/getcapacitor/myapp'), { recursive: true, force: true });
+  cpSync(join(src, 'test'), testDir, { recursive: true });
 }
 
-function patchManifest(app, dir, secure) {
+/** Права, ссылки hubapp://, список игр и VPN-сервис в AndroidManifest.xml. */
+function patchManifest(dir, secure) {
   const path = join(dir, 'android/app/src/main/AndroidManifest.xml');
   let xml = readFileSync(path, 'utf8');
-  const { scheme, permissions = [] } = APPS[app];
 
-  const perms = ['android.permission.INTERNET', ...permissions];
-  for (const p of perms) {
+  for (const p of ['android.permission.INTERNET', ...APP.permissions]) {
     if (!xml.includes(`"${p}"`)) xml = xml.replace('</manifest>', `    <uses-permission android:name="${p}" />\n</manifest>`);
   }
 
-  // hubvoice://… открывает это приложение (вход через другое приложение Hub, приглашения в комнаты).
-  if (!xml.includes(`android:scheme="${scheme}"`)) {
+  // hubapp://room?app=voice&name=squad — приглашения в комнаты открывают приложение.
+  if (!xml.includes(`android:scheme="${APP.scheme}"`)) {
     xml = xml.replace(/(<activity[\s\S]*?<\/intent-filter>)/, `$1
             <intent-filter android:autoVerify="false">
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
-                <data android:scheme="${scheme}" />
+                <data android:scheme="${APP.scheme}" />
             </intent-filter>`);
   }
 
-  // Android 11+: чтобы видеть, какие ещё приложения Hub (и для Boost — какие игры) установлены.
+  // Android 11+: чтобы Boost видел, какие игры установлены.
   xml = xml.replace(/\s*<queries>[\s\S]*?<\/queries>\n?/, '\n');
-  {
-    const others = Object.entries(APPS).filter(([k]) => k !== app).map(([, a]) => a.scheme);
-    const intents = others.map((s) => `        <intent>\n            <action android:name="android.intent.action.VIEW" />\n            <data android:scheme="${s}" />\n        </intent>`).join('\n');
-    const games = app === 'boost' ? GAMES.flatMap((g) => g.android ?? []).map((pkg) => `\n        <package android:name="${pkg}" />`).join('') : '';
-    xml = xml.replace('<application', `<queries>\n${intents}${games}\n    </queries>\n\n    <application`);
-  }
+  const games = GAMES.flatMap((g) => g.android ?? []).map((pkg) => `        <package android:name="${pkg}" />`).join('\n');
+  xml = xml.replace('<application', `<queries>\n${games}\n    </queries>\n\n    <application`);
 
-  // VPN-сервис ускорителя.
-  if (app === 'boost' && !xml.includes('BoostVpnService')) {
+  if (!xml.includes('BoostVpnService')) {
     xml = xml.replace('</application>', `    <service
-            android:name=".BoostVpnService"
+            android:name=".boost.BoostVpnService"
             android:permission="android.permission.BIND_VPN_SERVICE"
             android:exported="false">
             <intent-filter>
@@ -114,31 +102,26 @@ function patchManifest(app, dir, secure) {
   }
 
   // Тестовые сборки разрешают http, чтобы подключаться к серверу на компьютере в той же Wi-Fi-сети.
-  // Для публикации собирайте с --secure и сервером на https.
   if (!secure && !xml.includes('usesCleartextTraffic')) {
     xml = xml.replace('<application', '<application\n        android:usesCleartextTraffic="true"');
   }
   writeFileSync(path, xml);
 }
 
-// Простые векторные иконки: наушники, «play», молния — на фоне цвета приложения.
-const ICON_PATHS = {
-  voice: '<path android:strokeColor="#FFFFFF" android:strokeWidth="6" android:strokeLineCap="round" android:fillColor="#00000000" android:pathData="M36,64 L36,54 A18,18 0 0 1 72,54 L72,64"/>'
-    + '<path android:fillColor="#FFFFFF" android:pathData="M30,58 h12 v20 h-8 a4,4 0 0 1 -4,-4 z M66,58 h12 v16 a4,4 0 0 1 -4,4 h-8 z"/>',
-  watch: '<path android:fillColor="#FFFFFF" android:pathData="M45,36 L75,54 L45,72 Z"/>',
-  boost: '<path android:fillColor="#FFFFFF" android:pathData="M60,28 L38,58 L52,58 L47,80 L70,48 L56,48 Z"/>',
-};
-
-function patchIcons(app, dir) {
+/** Иконка Hub: три точки (Voice, Watch, Boost), как на сайте. */
+function patchIcons(dir) {
   const res = join(dir, 'android/app/src/main/res');
-  const { color } = APPS[app];
+  const dot = (cx, cy, color) => `<path android:fillColor="${color}" android:pathData="M${cx - 9},${cy} a9,9 0 1,0 18,0 a9,9 0 1,0 -18,0"/>`;
   writeFileSync(join(res, 'drawable/hub_icon_fg.xml'), `<?xml version="1.0" encoding="utf-8"?>
 <vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">
-    ${ICON_PATHS[app]}
+    <path android:strokeColor="#40FFFFFF" android:strokeWidth="2.5" android:strokeLineJoin="round" android:fillColor="#00000000" android:pathData="M35,64 L54,42 L73,64 Z"/>
+    ${dot(35, 64, '#7C5CFF')}
+    ${dot(54, 42, '#FF4F8B')}
+    ${dot(73, 64, '#19D38A')}
 </vector>\n`);
   writeFileSync(join(res, 'values/ic_launcher_background.xml'), `<?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="ic_launcher_background">${color}</color>
+    <color name="ic_launcher_background">#151827</color>
 </resources>\n`);
   for (const name of ['ic_launcher.xml', 'ic_launcher_round.xml']) {
     writeFileSync(join(res, 'mipmap-anydpi-v26', name), `<?xml version="1.0" encoding="utf-8"?>
@@ -147,70 +130,57 @@ function patchIcons(app, dir) {
     <foreground android:drawable="@drawable/hub_icon_fg"/>
 </adaptive-icon>\n`);
   }
-  // Заставка при запуске: тёмный фон и иконка приложения.
   writeFileSync(join(res, 'drawable/hub_splash.xml'), `<?xml version="1.0" encoding="utf-8"?>
 <layer-list xmlns:android="http://schemas.android.com/apk/res/android">
     <item><color android:color="#0B0D14"/></item>
-    <item android:width="96dp" android:height="96dp" android:gravity="center">
-        <shape android:shape="oval"><solid android:color="${color}"/></shape>
-    </item>
-    <item android:width="96dp" android:height="96dp" android:gravity="center" android:drawable="@drawable/hub_icon_fg"/>
+    <item android:width="160dp" android:height="160dp" android:gravity="center" android:drawable="@drawable/hub_icon_fg"/>
 </layer-list>\n`);
   const styles = join(res, 'values/styles.xml');
   writeFileSync(styles, readFileSync(styles, 'utf8').replace('@drawable/splash<', '@drawable/hub_splash<'));
 }
 
 function main() {
-const args = process.argv.slice(2);
-const which = args.find((a) => !a.startsWith('--')) ?? 'all';
-const apiBase = (args.find((a) => a.startsWith('--api='))?.slice(6) ?? 'http://10.0.2.2:3000').replace(/\/$/, '');
-const buildApk = args.includes('--apk');
-const secure = args.includes('--secure');
-if (secure && !apiBase.startsWith('https://')) { console.error('С --secure адрес сервера должен быть https://'); process.exit(1); }
-const targets = which === 'all' ? Object.keys(APPS) : [which];
-for (const t of targets) if (!APPS[t]) { console.error(`Неизвестное приложение: ${t}`); process.exit(1); }
+  const args = process.argv.slice(2);
+  const apiBase = (args.find((a) => a.startsWith('--api='))?.slice(6) ?? 'http://10.0.2.2:3000').replace(/\/$/, '');
+  const buildApk = args.includes('--apk');
+  const secure = args.includes('--secure');
+  if (secure && !apiBase.startsWith('https://')) { console.error('С --secure адрес сервера должен быть https://'); process.exit(1); }
 
-mkdirSync(join(MOBILE, 'dist'), { recursive: true });
-for (const app of targets) {
-  const meta = APPS[app];
-  const dir = join(MOBILE, app);
-  console.log(`\n=== ${meta.name} (${meta.appId}) → API ${apiBase}`);
-  mkdirSync(dir, { recursive: true });
+  console.log(`=== ${APP.name} (${APP.appId}) → API ${apiBase}`);
+  mkdirSync(DIR, { recursive: true });
+  mkdirSync(join(MOBILE, 'dist'), { recursive: true });
   // Capacitor ищет плагины по зависимостям в package.json; сами пакеты лежат в корневом node_modules.
   const rootPkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8'));
   const capDeps = Object.fromEntries(Object.entries(rootPkg.devDependencies).filter(([k]) => k.startsWith('@capacitor/') && k !== '@capacitor/cli'));
-  writeFileSync(join(dir, 'package.json'), `${JSON.stringify({ name: `hub-${app}-mobile`, private: true, dependencies: capDeps }, null, 2)}\n`);
-  writeFileSync(join(dir, 'capacitor.config.json'), `${JSON.stringify({
-    appId: meta.appId,
-    appName: meta.name,
+  writeFileSync(join(DIR, 'package.json'), `${JSON.stringify({ name: 'hub-mobile', private: true, dependencies: capDeps }, null, 2)}\n`);
+  writeFileSync(join(DIR, 'capacitor.config.json'), `${JSON.stringify({
+    appId: APP.appId,
+    appName: APP.name,
     webDir: 'www',
     backgroundColor: '#0b0d14',
     android: { allowMixedContent: !secure },
     server: { androidScheme: 'https' },
   }, null, 2)}\n`);
-  buildWww(app, dir, apiBase);
+  buildWww(DIR, apiBase);
 
   const cap = join(ROOT, 'node_modules/@capacitor/cli/bin/capacitor');
-  if (!existsSync(join(dir, 'android'))) run(process.execPath, [cap, 'add', 'android'], dir);
-  run(process.execPath, [cap, 'sync', 'android'], dir);
-  copyNative(app, dir);
-  patchManifest(app, dir, secure);
-  patchIcons(app, dir);
+  if (!existsSync(join(DIR, 'android'))) run(process.execPath, [cap, 'add', 'android'], DIR);
+  run(process.execPath, [cap, 'sync', 'android'], DIR);
+  copyNative(DIR);
+  patchManifest(DIR, secure);
+  patchIcons(DIR);
 
   if (buildApk) {
     if (!process.env.ANDROID_HOME && !process.env.ANDROID_SDK_ROOT) {
       console.error('Для сборки APK задайте ANDROID_HOME (путь к Android SDK).');
       process.exit(1);
     }
-    const android = join(dir, 'android');
-    const tasks = existsSync(join(MOBILE, 'native', app, 'test')) ? ['testDebugUnitTest', 'assembleDebug'] : ['assembleDebug'];
-    run(join(android, 'gradlew'), [...tasks, '--no-daemon', '-q'], android);
-    const apk = join(android, 'app/build/outputs/apk/debug/app-debug.apk');
-    const out = join(MOBILE, 'dist', `hub-${app}-debug.apk`);
-    copyFileSync(apk, out);
+    const android = join(DIR, 'android');
+    run(join(android, 'gradlew'), ['testDebugUnitTest', 'assembleDebug', '--no-daemon', '-q'], android);
+    const out = join(MOBILE, 'dist', 'hub-debug.apk');
+    copyFileSync(join(android, 'app/build/outputs/apk/debug/app-debug.apk'), out);
     console.log(`APK: ${out}`);
   }
-}
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) main();

@@ -17,14 +17,12 @@ const API_BASE = String((IS_NATIVE && savedServer()) || CONFIG.apiBase || '').re
 export const apiUrl = (path) => API_BASE + path;
 /** Публичная ссылка (для приглашений): ведёт на сайт, даже если открыто из приложения. */
 export const publicUrl = (path) => (API_BASE || location.origin) + path;
-const schemeOf = (app) => `hub${app}`;
 
-/** Адрес страницы: на сайте — /voice, в приложении — свой файл или другое приложение Hub. */
+/** Адрес страницы: на сайте — /voice, в приложении Hub — файл внутри приложения. */
 export function pageUrl(app) {
   if (!IS_NATIVE) return app === 'account' ? '/' : `/${app}`;
   if (app === 'account') return '/account.html';
-  if (app === CONFIG.app) return `/${app}/index.html`;
-  return `${schemeOf(app)}://open`;
+  return `/${app}/index.html`;
 }
 
 const storage = {
@@ -159,9 +157,8 @@ export async function ensureLogin(appName) {
   const overlay = document.createElement('div');
   overlay.className = 'overlay';
   const meta = APP_META[appName];
-  overlay.innerHTML = `<div class="card"><h2>${meta.icon} ${meta.title}</h2><p class="muted">Войдите в аккаунт Hub, чтобы продолжить.</p><div class="sso"></div><div class="auth"></div></div>`;
+  overlay.innerHTML = `<div class="card"><h2>${meta.icon} ${meta.title}</h2><p class="muted">Войдите в аккаунт Hub, чтобы продолжить.</p><div class="auth"></div></div>`;
   document.body.append(overlay);
-  if (IS_NATIVE) nativeSsoButtons(overlay.querySelector('.sso'), appName);
   const account = await authForm(overlay.querySelector('.auth'), appName);
   overlay.remove();
   return account;
@@ -182,7 +179,25 @@ export function renderTopbar(appName, account) {
       <a href="${pageUrl('account')}" style="color:inherit;text-decoration:none" data-testid="username">${esc(account.user.username)}</a>
     </div>` : ''}`;
   document.body.prepend(bar);
+  renderTabbar(appName);
+  if (appName) showIosInstallHint(); // на главной вместо всплывающей подсказки — карточка
+
   return bar;
+}
+
+/** Нижнее меню на телефоне — как в обычных приложениях. */
+function renderTabbar(appName) {
+  if (document.querySelector('.tabbar')) return;
+  const nav = document.createElement('nav');
+  nav.className = 'tabbar';
+  nav.setAttribute('aria-label', 'Разделы');
+  const tabs = [['account', '🏠', 'Hub'], ...Object.entries(APP_META).map(([k, m]) => [k, m.icon, m.title])];
+  nav.innerHTML = tabs.map(([k, icon, title]) => `
+    <a href="${pageUrl(k)}" class="${(appName ?? 'account') === k ? 'active' : ''}" data-tab-link="${k}">
+      <span class="tab-icon">${icon}</span><span>${title}</span>
+    </a>`).join('');
+  document.body.append(nav);
+  document.body.classList.add('has-tabbar');
 }
 
 /** WebSocket-соединение с автопереподключением. */
@@ -299,7 +314,6 @@ export function getRealtime() {
 }
 
 export function roomLink(app, room) {
-  if (IS_NATIVE && app !== CONFIG.app) return `${schemeOf(app)}://room?name=${encodeURIComponent(room)}`;
   return `${pageUrl(app)}#room=${encodeURIComponent(room)}&join=1`;
 }
 
@@ -418,77 +432,29 @@ export function mountFriends(topbar, { inviteTarget = () => null } = {}) {
 /** Переход по ссылке; если это та же страница с другим #, перезагружаем её (для автовхода в комнату). */
 export function goTo(url) {
   const sameDoc = url.startsWith('/') && url.split('#')[0] === location.pathname;
-  if (IS_NATIVE && /^hub\w+:\/\//.test(url)) { openExternal(url); return; }
   location.href = url;
   if (sameDoc) location.reload();
 }
 
-// ---------- Мобильное приложение: вход через другое приложение Hub и глубокие ссылки ----------
+// ---------- Приложение Hub для Android: ссылки-приглашения и кнопка «назад» ----------
 
-const plugins = () => window.Capacitor?.Plugins ?? {};
-
-function openExternal(url) {
-  const launcher = plugins().AppLauncher;
-  if (launcher) return launcher.openUrl({ url }).catch(() => toast('Приложение не установлено', 'bad'));
-  location.href = url;
-}
-
-/** Кнопки «Войти через Hub Voice/Watch/Boost» — только для установленных приложений. */
-async function nativeSsoButtons(box, appName) {
-  const launcher = plugins().AppLauncher;
-  if (!launcher) return;
-  for (const [k, m] of Object.entries(APP_META)) {
-    if (k === appName) continue;
-    let installed = false;
-    try { installed = (await launcher.canOpenUrl({ url: `${schemeOf(k)}://open` })).value; } catch { /* нет доступа */ }
-    if (!installed) continue;
-    const b = document.createElement('button');
-    b.className = 'btn ghost';
-    b.style.cssText = 'width:100%;margin-bottom:8px';
-    b.textContent = `${m.icon} Войти через Hub ${m.title}`;
-    b.addEventListener('click', () => openExternal(`${schemeOf(k)}://sso?for=${appName}`));
-    box.append(b);
-  }
-  if (box.children.length) box.insertAdjacentHTML('beforeend', '<p class="muted small" style="text-align:center">или</p>');
-}
-
-/** Разбор ссылок вида hubvoice://sso?for=watch (не полагаемся на URL() для нестандартных схем). */
+/** Разбор ссылок вида hubapp://room?app=voice&name=squad (не полагаемся на URL() для нестандартных схем). */
 export function parseDeepLink(url) {
-  const m = /^hub(\w+):\/\/([^/?#]+)\/?(?:\?([^#]*))?/.exec(String(url));
+  const m = /^hubapp:\/\/([^/?#]+)\/?(?:\?([^#]*))?/.exec(String(url));
   if (!m) return null;
-  return { app: m[1], action: m[2], params: new URLSearchParams(m[3] ?? '') };
+  return { action: m[1], params: new URLSearchParams(m[2] ?? '') };
 }
 
-export async function handleDeepLink(url) {
+export function handleDeepLink(url) {
   const link = parseDeepLink(url);
-  if (!link || link.app !== CONFIG.app) return;
-  const { action, params } = link;
-  if (action === 'open') { if (location.pathname !== pageUrl(CONFIG.app)) location.href = pageUrl(CONFIG.app); return; }
-  if (action === 'room') { goTo(roomLink(CONFIG.app, params.get('name') ?? '')); return; }
-  if (action === 'sso') {
-    // Другое приложение Hub просит войти в этот же аккаунт.
-    const target = params.get('for');
-    if (!APP_META[target] || target === CONFIG.app) return;
-    if (!getToken()) { toast('Сначала войдите в аккаунт здесь', 'bad'); return; }
-    try {
-      const me = await api('/api/me');
-      if (!confirm(`Войти в Hub ${APP_META[target].title} как ${me.user.username}?`)) return;
-      const { code } = await api('/api/auth/sso/code', { method: 'POST', body: { app: target } });
-      openExternal(`${schemeOf(target)}://sso-callback?code=${encodeURIComponent(code)}`);
-    } catch (e) { toast(e.message, 'bad'); }
-    return;
-  }
-  if (action === 'sso-callback') {
-    try {
-      const data = await api('/api/auth/sso/exchange', { method: 'POST', body: { code: params.get('code'), app: CONFIG.app } });
-      setToken(data.token);
-      location.href = pageUrl(CONFIG.app);
-    } catch (e) { toast(e.message, 'bad'); }
-  }
+  if (!link) return;
+  const app = link.params.get('app');
+  if (link.action === 'room' && APP_META[app]) goTo(roomLink(app, link.params.get('name') ?? ''));
+  else if (link.action === 'open') goTo(APP_META[app] ? pageUrl(app) : pageUrl('account'));
 }
 
 if (IS_NATIVE) {
-  const { App } = plugins();
+  const App = window.Capacitor?.Plugins?.App;
   App?.addListener('appUrlOpen', ({ url }) => handleDeepLink(url));
   App?.getLaunchUrl?.().then((r) => {
     // Обрабатываем ссылку запуска один раз за запуск приложения.
@@ -500,4 +466,56 @@ if (IS_NATIVE) {
     else if (canGoBack) history.back();
     else App.minimizeApp?.();
   });
+}
+
+// ---------- Установка на экран «Домой» (PWA) ----------
+
+export const IS_STANDALONE = (() => {
+  try { return window.navigator.standalone === true || window.matchMedia('(display-mode: standalone)').matches; } catch { return false; }
+})();
+const IS_IOS = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+
+if (!IS_NATIVE && 'serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1')) {
+  window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js').catch(() => {}));
+}
+
+let deferredInstall = null;
+window.addEventListener('beforeinstallprompt', (e) => {
+  e.preventDefault();
+  deferredInstall = e;
+  document.dispatchEvent(new CustomEvent('hub:installable'));
+});
+
+/** Можно ли предложить установку и как: 'prompt' (Android/ПК Chrome), 'ios' (инструкция), null. */
+export function installMode() {
+  if (IS_NATIVE || IS_STANDALONE) return null;
+  if (deferredInstall) return 'prompt';
+  if (IS_IOS) return 'ios';
+  return null;
+}
+
+export async function promptInstall() {
+  if (!deferredInstall) return false;
+  deferredInstall.prompt();
+  const { outcome } = await deferredInstall.userChoice;
+  deferredInstall = null;
+  return outcome === 'accepted';
+}
+
+/** Значок «Поделиться» как в Safari: квадрат со стрелкой вверх. */
+export const SHARE_ICON = '<svg class="share-ico" viewBox="0 0 24 24" width="16" height="16" aria-label="Поделиться" role="img"><path d="M12 3v12M7.5 7.5 12 3l4.5 4.5M6 11H5v10h14V11h-1" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+
+/** Подсказка на iPhone: как установить Hub на экран «Домой». Показывается, пока её не закроют. */
+export function showIosInstallHint() {
+  if (installMode() !== 'ios' || storage.get('hub.iosHintClosed') || document.querySelector('.install-hint')) return;
+  const el = document.createElement('div');
+  el.className = 'install-hint';
+  el.dataset.testid = 'ios-install-hint';
+  el.innerHTML = `
+    <img src="/icons/hub-180.png" alt="" width="44" height="44">
+    <div class="grow"><b>Установите Hub на iPhone</b>
+      <div class="small">Нажмите ${SHARE_ICON} «Поделиться», затем «На экран „Домой“». Один вход — Voice, Watch и Boost.</div></div>
+    <button class="btn ghost sm" aria-label="Закрыть">✕</button>`;
+  el.querySelector('button').addEventListener('click', () => { storage.set('hub.iosHintClosed', '1'); el.remove(); });
+  document.body.append(el);
 }

@@ -2,15 +2,45 @@
 <html lang="ru">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0b0d14">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="icon" href="/icons/favicon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="/icons/hub-180.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Hub">
   <title>Hub аккаунт</title>
   <link rel="stylesheet" href="/shared/style.css">
-  <link rel="manifest" href="/manifest.webmanifest">
 </head>
 <body data-app="voice">
   <main class="container" id="root"></main>
   <script type="module">
-    import { api, getToken, setToken, authForm, renderTopbar, mountFriends, logout, pageUrl, APP_META, esc, toast } from '/shared/hub.js';
+    import { api, getToken, setToken, authForm, renderTopbar, mountFriends, logout, pageUrl, APP_META, esc, toast, installMode, promptInstall, SHARE_ICON } from '/shared/hub.js';
+
+    /** Карточка «Установить Hub»: кнопка на Android/ПК, инструкция на iPhone. */
+    function installCard() {
+      const box = document.getElementById('install');
+      if (!box) return;
+      const mode = installMode();
+      box.classList.toggle('hidden', !mode);
+      if (mode === 'prompt') {
+        box.innerHTML = `<div class="row wrap"><img src="/icons/hub-192.png" alt="" width="48" height="48" style="border-radius:12px">
+          <div class="grow"><b>Установите Hub как приложение</b><div class="muted small">Иконка на экране, открывается без браузера</div></div>
+          <button class="btn" data-testid="install-btn">📲 Установить</button></div>`;
+        box.querySelector('button').addEventListener('click', async () => { if (await promptInstall()) toast('Hub установлен'); installCard(); });
+      } else if (mode === 'ios') {
+        box.innerHTML = `<div class="row wrap" style="align-items:flex-start"><img src="/icons/hub-180.png" alt="" width="48" height="48" style="border-radius:12px">
+          <div class="grow"><b>Установите Hub на iPhone</b>
+          <ol class="small" style="margin:6px 0 0;padding-left:18px">
+            <li>Нажмите ${SHARE_ICON} «Поделиться» внизу Safari</li>
+            <li>Выберите «На экран „Домой“»</li>
+            <li>Откройте Hub с экрана — один вход для Voice, Watch и Boost</li>
+          </ol></div></div>`;
+      }
+    }
+    document.addEventListener('hub:installable', installCard);
 
     const root = document.getElementById('root');
     const fmtDate = (ms) => new Date(ms).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' });
@@ -34,10 +64,12 @@
           <div>
             <h1>Один аккаунт — три приложения</h1>
             <p class="muted">Зарегистрируйтесь один раз и пользуйтесь голосовым чатом, совместным просмотром и ускорителем игр без повторной регистрации. Одна подписка Premium работает везде.</p>
+            <div class="card hidden" id="install" style="margin-top:16px"></div>
             <div class="grid" style="margin-top:16px">${appCards()}</div>
           </div>
           <div class="card" id="auth"></div>
         </section>`;
+      installCard();
       await authForm(document.getElementById('auth'));
       location.reload();
     }
@@ -85,6 +117,7 @@
       root.innerHTML = `
         <h1>Привет, ${esc(account.user.username)} 👋</h1>
         <p class="muted">Аккаунт Hub · ${esc(account.user.email)} · с ${fmtDate(account.user.createdAt)}</p>
+        <div class="card hidden" id="install" style="margin-top:16px"></div>
         <h2 style="margin-top:24px">Ваши приложения</h2>
         <div class="grid cols-3" id="apps">${appCards(account.apps)}</div>
         <h2 style="margin-top:32px">Подписка</h2>
@@ -116,6 +149,7 @@
         </div>
         <div style="margin-top:32px"><button class="btn ghost" id="logout">Выйти из аккаунта</button></div>`;
       document.getElementById('open-friends').addEventListener('click', () => friends.open());
+      installCard();
       document.getElementById('pw-form').addEventListener('submit', async (e) => {
         e.preventDefault();
         try {

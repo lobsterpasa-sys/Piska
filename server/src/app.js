@@ -162,34 +162,6 @@ export function createHub(options = {}) {
 
   app.get('/api/me', requireAuth, (req, res) => res.json(account(req.user.id)));
 
-  // ---------- Вход через другое приложение Hub (без повторного ввода пароля) ----------
-  // Приложение, где пользователь уже вошёл, выдаёт одноразовый код на 60 секунд для конкретного
-  // приложения; то обменивает код на свой токен. Сам токен между приложениями не передаётся.
-  const ssoCodes = new Map(); // code -> { userId, app, exp }
-  const SSO_TTL = 60_000;
-  app.post('/api/auth/sso/code', requireAuth, (req, res) => {
-    const target = req.body?.app;
-    if (!APPS.includes(target)) return res.status(400).json({ error: 'Неизвестное приложение' });
-    const now = Date.now();
-    for (const [c, v] of ssoCodes) if (v.exp < now) ssoCodes.delete(c);
-    if (ssoCodes.size > 10_000) return res.status(503).json({ error: 'Попробуйте позже' });
-    const code = randomBytes(24).toString('base64url');
-    ssoCodes.set(code, { userId: req.user.id, app: target, exp: now + SSO_TTL });
-    res.json({ code, expiresIn: SSO_TTL / 1000 });
-  });
-
-  app.post('/api/auth/sso/exchange', (req, res) => {
-    if (authLimiter(`sso:${req.ip}`)) return res.status(429).json({ error: 'Слишком много попыток, подождите минуту' });
-    const code = String(req.body?.code ?? '');
-    const entry = ssoCodes.get(code);
-    ssoCodes.delete(code); // одноразовый, даже если проверка ниже не прошла
-    if (!entry || entry.exp < Date.now() || entry.app !== req.body?.app) return res.status(401).json({ error: 'Код недействителен или устарел' });
-    const user = q.userById.get(entry.userId);
-    if (!user) return res.status(401).json({ error: 'Аккаунт не найден' });
-    linkApp(user.id, entry.app);
-    res.json({ token: sessionToken(user), ...account(user.id) });
-  });
-
   // Приложение отмечает, что пользователь вошёл в него этим же аккаунтом.
   app.post('/api/apps/:app/link', requireAuth, (req, res) => {
     if (!APPS.includes(req.params.app)) return res.status(404).json({ error: 'Неизвестное приложение' });
@@ -363,7 +335,8 @@ export function createHub(options = {}) {
   });
 
   // ---------- Статика (веб-версии приложений) ----------
-  app.use(express.static(PUBLIC_DIR, { extensions: ['html'] }));
+  // redirect: false — /voice отдаётся как есть, без перенаправления на /voice/ (важно для офлайн-кеша).
+  app.use(express.static(PUBLIC_DIR, { extensions: ['html'], redirect: false }));
   for (const name of APPS) app.get(`/${name}`, (req, res) => res.sendFile(join(PUBLIC_DIR, name, 'index.html')));
 
   app.use((err, req, res, next) => { // eslint-disable-line no-unused-vars
